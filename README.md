@@ -1,14 +1,6 @@
 # Hypers0nic
 
-A blazing-fast Scramjet proxy client built for modern web browsing
-
-Hypers0nic wraps the [Scramjet](https://github.com/MercuryWorkshop/scramjet)
-interception proxy in a lightweight Next.js UI shell. You land on a clean
-search page, type a URL or query, and the target site loads through a
-service worker. 
-Settings, tab cloak, theme and search engine defaults can
-be imported from a [Tinf0il](https://github.com/Aluminum-Depot/Tinf0il)
-account.
+A blazing-fast scramjet client built for modern browsing
 
 ## Features
 
@@ -24,12 +16,16 @@ account.
 - **6 themes** including the default black/white/purple terminal aesthetic
 - **Focus timer** with configurable durations (15/25/50 min), break timer,
   session counter, and streak tracking
+- **Command palette** (Ctrl+K) with fuzzy search across history, bookmarks,
+  settings, and shortcuts
 - **Bookmarks** with star toggle in the proxy toolbar
 - **History panel** with search and day grouping
 - **Apps portal** with 7 built-in tools: Calculator, Notepad, QR Code
   Generator, Unit Converter, Color Picker, Password Generator, Stopwatch
 - **Keyboard shortcuts** throughout
 - **Settings export/import** for backup and restore
+- **Panic key** — double-press Esc to instantly close and redirect
+- **Auto-warming proxy** — Scramjet boots on page load for instant first search
 
 ## Getting started
 
@@ -38,13 +34,20 @@ bun install
 bun run dev          # Next.js on :3000
 ```
 
-Start the wisp relay:
+Start the wisp relay (optional — defaults to wss://anura.pro):
 
 ```sh
 cd mini-services/wisp-server
 bun install
 bun run dev          # wisp relay on :3001
 ```
+
+## Deploy to Vercel
+
+1. Push this repo to GitHub
+2. Go to [vercel.com](https://vercel.com) → Add New → Project
+3. Select your repo — Vercel auto-detects Next.js
+4. Click Deploy — no environment variables needed
 
 ## Tech stack
 
@@ -53,4 +56,3 @@ bun run dev          # wisp relay on :3001
 - [Tailwind CSS 4](https://tailwindcss.com) + [shadcn/ui](https://ui.shadcn.com)
 - [Zustand](https://github.com/pmndrs/zustand)
 - [@mercuryworkshop/scramjet](https://www.npmjs.com/package/@mercuryworkshop/scramjet)
-
