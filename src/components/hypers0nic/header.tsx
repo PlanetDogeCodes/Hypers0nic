@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Settings, Home as HomeIcon, History, Search, EyeOff, Eye, LayoutGrid, ShieldCheck, User } from "lucide-react";
+import { Settings, Home as HomeIcon, History, Search, EyeOff, Eye, LayoutGrid, ShieldCheck, User, Cookie } from "lucide-react";
 import { useHypers0nic } from "@/store/hypers0nic";
 import { Clock } from "./clock";
 import { Button } from "@/components/ui/button";
@@ -20,12 +20,14 @@ export function Header({
   onOpenPalette,
   onOpenApps,
   onOpenTinf0il,
+  onOpenCookies,
 }: {
   onOpenSettings: () => void;
   onOpenHistory: () => void;
   onOpenPalette: () => void;
   onOpenApps: () => void;
   onOpenTinf0il: () => void;
+  onOpenCookies: () => void;
 }) {
   const view = useHypers0nic((s) => s.view);
   const goHome = useHypers0nic((s) => s.goHome);
@@ -190,6 +192,23 @@ export function Header({
               </TooltipTrigger>
               <TooltipContent side="bottom">
                 <p>History · Ctrl+H</p>
+              </TooltipContent>
+            </Tooltip>
+
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={onOpenCookies}
+                  className="size-8 text-muted-foreground hover:text-foreground"
+                  aria-label="Cookie manager"
+                >
+                  <Cookie className="size-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                <p>Cookies</p>
               </TooltipContent>
             </Tooltip>
 

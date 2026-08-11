@@ -33,6 +33,8 @@ export const DEFAULT_SETTINGS: Hypers0nicSettings = {
     panicKeyEnabled: true,
     panicKey: "Escape",
     panicUrl: "https://classroom.google.com",
+    adBlockerEnabled: true,
+    autoProxyLinks: true,
   },
   // Default wisp relay. Using wss://anura.pro as the public relay.
   wispUrl: "wss://anura.pro",

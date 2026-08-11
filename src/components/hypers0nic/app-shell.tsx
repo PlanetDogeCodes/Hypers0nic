@@ -10,6 +10,7 @@ import { HistoryPanel } from "./history-panel";
 import { CommandPalette } from "./command-palette";
 import { AppsPanel } from "./apps-panel";
 import { Tinf0ilAuth } from "./tinf0il-auth";
+import { CookieManager } from "./cookie-manager";
 import { useHypers0nic } from "@/store/hypers0nic";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { usePanicKey } from "@/hooks/use-panic-key";
@@ -26,6 +27,7 @@ export function AppShell() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [appsOpen, setAppsOpen] = useState(false);
   const [tinf0ilOpen, setTinf0ilOpen] = useState(false);
+  const [cookiesOpen, setCookiesOpen] = useState(false);
 
   useEffect(() => {
     hydrate();
@@ -70,6 +72,7 @@ export function AppShell() {
         onOpenPalette={() => setPaletteOpen(true)}
         onOpenApps={() => setAppsOpen(true)}
         onOpenTinf0il={() => setTinf0ilOpen(true)}
+        onOpenCookies={() => setCookiesOpen(true)}
       />
       {/* When the top bar is always visible, push content down by its height (h-12 = 3rem). */}
       <div className={topBarAlwaysVisible ? "pt-12" : ""}>
@@ -99,6 +102,7 @@ export function AppShell() {
       />
       <AppsPanel open={appsOpen} onOpenChange={setAppsOpen} />
       <Tinf0ilAuth open={tinf0ilOpen} onOpenChange={setTinf0ilOpen} />
+      <CookieManager open={cookiesOpen} onOpenChange={setCookiesOpen} />
     </div>
   );
 }

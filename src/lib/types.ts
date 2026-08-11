@@ -66,6 +66,8 @@ export interface Preferences {
   panicKeyEnabled: boolean;
   panicKey: string;
   panicUrl: string;
+  adBlockerEnabled: boolean;
+  autoProxyLinks: boolean;
 }
 
 export interface TinfoilProfile {

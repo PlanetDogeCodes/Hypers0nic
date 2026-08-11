@@ -20,6 +20,16 @@ export function PreferencesPanel() {
     description: string;
   }[] = [
     {
+      key: "adBlockerEnabled",
+      label: "Ad & tracker blocker",
+      description: "Block ads and tracking scripts on proxied pages. Uses a conservative filter list that won't break sites.",
+    },
+    {
+      key: "autoProxyLinks",
+      label: "Auto-proxy search result links",
+      description: "Rewrite links on proxied pages so they open through the proxy instead of the real site.",
+    },
+    {
       key: "openInAboutBlank",
       label: "Open searches in about:blank tabs",
       description: "Every search/URL opens in a new about:blank tab for discretion.",
