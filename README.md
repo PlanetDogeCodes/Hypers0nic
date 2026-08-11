@@ -1,12 +1,12 @@
 # Hypers0nic
 
-A blazing-fast Scramjet proxy client built for modern web browsing
+A Scramjet-based web proxy client with a minimalist terminal aesthetic,
+Tinf0il account sync, tab cloaking, and built-in productivity tools.
 
 Hypers0nic wraps the [Scramjet](https://github.com/MercuryWorkshop/scramjet)
-interception proxy in a lightweight Next.js UI shell. You land on a clean
+interception proxy in a lightweight Next.js shell. You land on a clean
 search page, type a URL or query, and the target site loads through a
-service worker. 
-Settings, tab cloak, theme and search engine defaults can
+service worker. Settings, tab cloak, theme and search engine defaults can
 be imported from a [Tinf0il](https://github.com/Aluminum-Depot/Tinf0il)
 account.
 
@@ -24,12 +24,26 @@ account.
 - **6 themes** including the default black/white/purple terminal aesthetic
 - **Focus timer** with configurable durations (15/25/50 min), break timer,
   session counter, and streak tracking
+- **Command palette** (Ctrl+K) with fuzzy search across history, bookmarks,
+  settings, and shortcuts
 - **Bookmarks** with star toggle in the proxy toolbar
 - **History panel** with search and day grouping
 - **Apps portal** with 7 built-in tools: Calculator, Notepad, QR Code
   Generator, Unit Converter, Color Picker, Password Generator, Stopwatch
 - **Keyboard shortcuts** throughout
 - **Settings export/import** for backup and restore
+- **Minimalist UI** — pure black background, white monospace text, purple
+  accents, no gradients
+
+## Design
+
+The UI uses a pure black background (`#000000`) with white monospace text
+and white borders. Purple (`#a855f7`) is used sparingly as an accent for
+interactive elements. No gradients, no glassmorphism — flat, professional,
+terminal-inspired.
+
+The top bar (header on home, toolbar in proxy view) is hidden by default
+and appears when the mouse moves near the top of the screen.
 
 ## Getting started
 
@@ -54,3 +68,6 @@ bun run dev          # wisp relay on :3001
 - [Zustand](https://github.com/pmndrs/zustand)
 - [@mercuryworkshop/scramjet](https://www.npmjs.com/package/@mercuryworkshop/scramjet)
 
+## License
+
+MIT
