@@ -27,6 +27,7 @@ A blazing-fast scramjet client built for modern browsing
 - **Panic key** — double-press Esc to instantly close and redirect
 - **Auto-warming proxy** — Scramjet boots on page load for instant first search
 
+
 ## Getting started
 
 ```sh
