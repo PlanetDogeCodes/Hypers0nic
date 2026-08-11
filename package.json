@@ -18,6 +18,7 @@
     "@dnd-kit/utilities": "^3.2.2",
     "@hookform/resolvers": "^5.1.1",
     "@mdxeditor/editor": "^3.39.1",
+    "@mercuryworkshop/bare-mux": "^2.1.9",
     "@mercuryworkshop/epoxy-transport": "2.1.28",
     "@mercuryworkshop/scramjet": "^2.0.67-alpha.2",
     "@mercuryworkshop/wisp-js": "^0.4.1",
