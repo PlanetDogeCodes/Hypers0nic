@@ -1,45 +1,24 @@
 /*
  * Hypers0nic service worker.
  *
- * Tries Scramjet v2 first, falls back to v1. Includes ad/tracker blocking,
- * search result link rewriting, and robust retry logic.
+ * Uses Scramjet v1 exclusively in the SW (v2 alpha crashes in SW context
+ * due to missing browser API bindings). V2 is only used client-side.
  *
- * The "negotiating wisp" hang is prevented by:
- * 1. A 30-second hard timeout on the entire fetch handler
- * 2. Retry logic with exponential backoff (5 attempts)
- * 3. Graceful fallback to network if Scramjet fails
+ * Includes ad/tracker blocking, search result link rewriting, and robust
+ * retry logic with IDB self-healing.
  */
 importScripts("/scramjet/scramjet.all.js");
 
-// V1 API (always available as fallback)
-var scramjetV1 = null;
-var scramjetV2 = null;
-var useV2 = false;
-
-// Try to load v2
-try {
-  importScripts("/scramjet/scramjet.v2.js");
-  if (self.$scramjet && self.$scramjet.ScramjetFetchHandler) {
-    scramjetV2 = new self.$scramjet.ScramjetFetchHandler();
-    useV2 = true;
-    console.log("[hypers0nic/sw] Using Scramjet v2");
-  }
-} catch (e) {
-  console.warn("[hypers0nic/sw] v2 load failed, falling back to v1:", e);
-}
-
-// Initialize v1 as fallback
-if (!useV2 && self.$scramjetLoadWorker) {
-  try {
-    var v1Factory = self.$scramjetLoadWorker();
-    scramjetV1 = new v1Factory.ScramjetServiceWorker();
-    console.log("[hypers0nic/sw] Using Scramjet v1");
-  } catch (e) {
-    console.error("[hypers0nic/sw] v1 init failed:", e);
-  }
-}
-
+var { ScramjetServiceWorker } = self.$scramjetLoadWorker();
+var scramjet = new ScramjetServiceWorker();
 var PROXY_PREFIX = "/service/";
+var configLoaded = false;
+
+self.addEventListener("install", function() { self.skipWaiting(); });
+self.addEventListener("activate", function(event) { event.waitUntil(self.clients.claim()); });
+self.addEventListener("message", function(event) {
+  if (event.data === "skipWaiting") self.skipWaiting();
+});
 
 // --- Ad/tracker blocker ---
 var AD_BLOCK_DOMAINS = [
@@ -140,12 +119,6 @@ var INJECT_SCRIPT = '<script>' +
   '})();' +
   '</script>';
 
-self.addEventListener("install", function() { self.skipWaiting(); });
-self.addEventListener("activate", function(event) { event.waitUntil(self.clients.claim()); });
-self.addEventListener("message", function(event) {
-  if (event.data === "skipWaiting") self.skipWaiting();
-});
-
 function isAdRequest(urlStr) {
   try {
     var u = new URL(urlStr);
@@ -180,29 +153,68 @@ function injectIntoHtml(response) {
   }).catch(function() { return response; });
 }
 
-// Unified scramjet interface — works with both v1 and v2
-var sj = {
-  loadConfig: function() {
-    if (useV2 && scramjetV2) return scramjetV2.loadConfig();
-    if (scramjetV1) return scramjetV1.loadConfig();
-    return Promise.resolve();
-  },
-  route: function(event) {
-    if (useV2 && scramjetV2) return scramjetV2.route(event);
-    if (scramjetV1) return scramjetV1.route(event);
-    return false;
-  },
-  fetch: function(event) {
-    if (useV2 && scramjetV2) return scramjetV2.fetch(event);
-    if (scramjetV1) return scramjetV1.fetch(event);
-    return fetch(event.request);
-  },
-  get config() {
-    if (useV2 && scramjetV2) return scramjetV2.config;
-    if (scramjetV1) return scramjetV1.config;
-    return null;
-  }
-};
+// --- IDB self-healing ---
+// If the $scramjet DB exists but is missing object stores (the race condition
+// where the SW's loadConfig opened the DB before the controller created the
+// schema), delete it so the controller can recreate it cleanly.
+function healScramjetDB() {
+  return new Promise(function(resolve) {
+    var DB_NAME = "$scramjet";
+    function checkAndHeal() {
+      try {
+        var req = indexedDB.open(DB_NAME);
+        req.onsuccess = function() {
+          var db = req.result;
+          var stores = Array.from(db.objectStoreNames);
+          db.close();
+          if (stores.length > 0 && stores.indexOf("config") !== -1) {
+            resolve(true);
+          } else {
+            // DB exists but is empty/corrupt — delete it
+            var delReq = indexedDB.deleteDatabase(DB_NAME);
+            delReq.onsuccess = function() { resolve(false); };
+            delReq.onerror = function() { resolve(false); };
+            delReq.onblocked = function() { resolve(false); };
+          }
+        };
+        req.onerror = function() { resolve(false); };
+        req.onupgradeneeded = function() {
+          // DB didn't exist — let it be created empty, the controller will
+          // populate it. Close immediately.
+          req.result.close();
+          resolve(false);
+        };
+      } catch (e) {
+        resolve(false);
+      }
+    }
+    checkAndHeal();
+  });
+}
+
+// Safe loadConfig wrapper — heals the DB if the transaction fails
+function safeLoadConfig() {
+  return scramjet.loadConfig().then(function() {
+    configLoaded = true;
+  }).catch(function(err) {
+    // If it's the "object store not found" error, try healing the DB
+    if (err && (err.name === "NotFoundError" || (err.message && err.message.indexOf("object store") !== -1))) {
+      return healScramjetDB().then(function() {
+        // Wait a moment for the DB to settle, then retry
+        return new Promise(function(resolve) { setTimeout(resolve, 500); });
+      }).then(function() {
+        return scramjet.loadConfig().then(function() {
+          configLoaded = true;
+        }).catch(function() {
+          // Still failing — mark as not loaded, the fetch handler will
+          // return a retry response
+          configLoaded = false;
+        });
+      });
+    }
+    configLoaded = false;
+  });
+}
 
 self.addEventListener("fetch", function(event) {
   var url = new URL(event.request.url);
@@ -211,13 +223,26 @@ self.addEventListener("fetch", function(event) {
 
   event.respondWith(
     (async function() {
-      var maxAttempts = 5;
-      var delay = 400;
+      var maxAttempts = 7;
+      var delays = [200, 400, 600, 800, 1000, 1500, 2000];
       for (var i = 0; i < maxAttempts; i++) {
         try {
-          await sj.loadConfig();
-          if (sj.route(event)) {
-            var response = await sj.fetch(event);
+          // Heal DB on first attempt if needed
+          if (i === 0 && !configLoaded) {
+            await healScramjetDB();
+          }
+
+          await safeLoadConfig();
+
+          if (!configLoaded) {
+            if (i < maxAttempts - 1) {
+              await new Promise(function(r) { setTimeout(r, delays[i] || 2000); });
+              continue;
+            }
+          }
+
+          if (scramjet.route(event)) {
+            var response = await scramjet.fetch(event);
 
             // Block ad/tracker requests at network level
             var encodedUrl = url.pathname.substring(PROXY_PREFIX.length);
@@ -233,14 +258,19 @@ self.addEventListener("fetch", function(event) {
             }
             return response;
           }
+          // Not a scramjet route — pass through
           return await fetch(event.request);
         } catch (err) {
           if (i < maxAttempts - 1) {
-            await new Promise(function(r) { setTimeout(r, delay); });
+            // If it's the IDB error, heal and retry
+            if (err && (err.name === "NotFoundError" || (err.message && err.message.indexOf("object store") !== -1))) {
+              await healScramjetDB();
+            }
+            await new Promise(function(r) { setTimeout(r, delays[i] || 2000); });
             continue;
           }
-          console.error("[hypers0nic/sw] scramjet error after retries:", err);
-          // Last resort: try to fetch directly (may work for simple sites)
+          console.error("[hypers0nic/sw] scramjet error after " + maxAttempts + " retries:", err);
+          // Last resort: try a direct fetch (works for simple sites)
           try { return await fetch(event.request); } catch(e) {}
           return new Response(
             "Scramjet proxy error: " + (err && err.message || err),

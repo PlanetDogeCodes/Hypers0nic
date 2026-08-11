@@ -1,7 +1,11 @@
 // Scramjet controller wrapper.
 //
-// Tries Scramjet v2 first, falls back to v1. The proxy pipeline:
-//   browser iframe -> /service/<encoded> -> service worker -> ScramjetServiceWorker/v2
+// Uses Scramjet v1 for both the client controller and the service worker.
+// V2 alpha crashes in the SW context due to missing browser API bindings,
+// so we stick with v1 which is stable.
+//
+// The proxy pipeline:
+//   browser iframe -> /service/<encoded> -> service worker -> ScramjetServiceWorker
 //   -> BareClient (bare-mux) -> EpoxyTransport -> wisp WebSocket relay -> target site
 //
 // The "negotiating wisp" hang is prevented by a 30-second hard timeout on
@@ -11,13 +15,12 @@ declare global {
   interface Window {
     $scramjetLoadController?: () => { ScramjetController: any };
     $scramjetLoadWorker?: () => any;
-    $scramjet?: any;
     $scramjetVersion?: { version: string; build: string };
   }
 }
 
 const SCRAMJET_PREFIX = "/service/";
-const SCRAMJET_V1_FILES = {
+const SCRAMJET_FILES = {
   wasm: "/scramjet/scramjet.wasm.wasm",
   all: "/scramjet/scramjet.all.js",
   sync: "/scramjet/scramjet.sync.js",
@@ -44,7 +47,6 @@ class ScramjetManager {
   private listeners = new Set<Listener>();
   private initPromise: Promise<void> | null = null;
   private bundleLoaded = false;
-  private useV2 = false;
 
   subscribe(listener: Listener): () => void {
     this.listeners.add(listener);
@@ -85,42 +87,23 @@ class ScramjetManager {
       await this.loadBundle();
       await ensureFreshScramjetDB();
 
-      // Try v2 first, fall back to v1
-      if (window.$scramjet && window.$scramjet.ScramjetClient) {
-        this.useV2 = true;
-        // V2 controller creation
-        const config = window.$scramjet.defaultConfig;
-        const { ScramjetClient } = window.$scramjet;
-        // V2 uses a different initialization — the controller is created
-        // implicitly by the service worker. On the client side, v2 doesn't
-        // need a separate controller object — the SW handles everything.
-        // We just need to verify the bundle loaded.
-        this.controller = { v2: true };
-        console.log("[hypers0nic] Using Scramjet v2 controller");
-      } else if (window.$scramjetLoadController) {
-        // V1 fallback
-        this.useV2 = false;
-        const factory = window.$scramjetLoadController;
-        const { ScramjetController } = factory();
-        this.controller = new ScramjetController({
-          prefix: SCRAMJET_PREFIX,
-          files: SCRAMJET_V1_FILES,
-          flags: {},
-          codec: {
-            encode: (u: string) => (u ? encodeURIComponent(u) : u),
-            decode: (u: string) => (u ? decodeURIComponent(u) : u),
-          },
-        });
-        await this.controller.init();
-        console.log("[hypers0nic] Using Scramjet v1 controller");
-      } else {
-        throw new Error("No Scramjet bundle available");
-      }
+      const factory = window.$scramjetLoadController!;
+      const { ScramjetController } = factory();
+      this.controller = new ScramjetController({
+        prefix: SCRAMJET_PREFIX,
+        files: SCRAMJET_FILES,
+        flags: {},
+        codec: {
+          encode: (u: string) => (u ? encodeURIComponent(u) : u),
+          decode: (u: string) => (u ? decodeURIComponent(u) : u),
+        },
+      });
+      await this.controller.init();
 
       this.setState({
         status: "ready",
         wispUrl,
-        version: window.$scramjetVersion?.version || (this.useV2 ? "2.0.67-alpha" : "1.1.0"),
+        version: window.$scramjetVersion?.version,
       });
     } catch (err) {
       this.setState({
@@ -132,35 +115,7 @@ class ScramjetManager {
   }
 
   private async loadBundle(): Promise<void> {
-    if (this.bundleLoaded) return;
-
-    // Try v2 first
-    await new Promise<void>((resolve) => {
-      const v2Script = document.createElement("script");
-      v2Script.id = "scramjet-v2-bundle";
-      v2Script.src = "/scramjet/scramjet.v2.js";
-      v2Script.async = true;
-      v2Script.onload = () => {
-        if (window.$scramjet && window.$scramjet.ScramjetFetchHandler) {
-          this.bundleLoaded = true;
-          console.log("[hypers0nic] v2 bundle loaded");
-          resolve();
-        } else {
-          // v2 didn't define the expected globals — fall through to v1
-          resolve();
-        }
-      };
-      v2Script.onerror = () => {
-        // v2 failed to load — fall through to v1
-        resolve();
-      };
-      document.head.appendChild(v2Script);
-    });
-
-    // If v2 loaded, we're done
-    if (this.bundleLoaded && window.$scramjet) return;
-
-    // Load v1 as fallback
+    if (this.bundleLoaded && window.$scramjetLoadController) return;
     await new Promise<void>((resolve, reject) => {
       if (window.$scramjetLoadController) {
         this.bundleLoaded = true;
@@ -173,7 +128,6 @@ class ScramjetManager {
       script.onload = () => {
         if (window.$scramjetLoadController) {
           this.bundleLoaded = true;
-          console.log("[hypers0nic] v1 bundle loaded");
           resolve();
         } else {
           reject(new Error("Scramjet bundle loaded but globals are missing"));
@@ -197,9 +151,6 @@ class ScramjetManager {
     let lastError: unknown;
     for (const candidate of candidates) {
       try {
-        // Hard 30-second timeout — prevents the "negotiating wisp" hang.
-        // If a relay is unreachable or slow, we move on to the next candidate
-        // instead of hanging indefinitely.
         const transportPromise = conn.setTransport("/epoxy/index.mjs", [
           { wisp: candidate },
         ]);
@@ -230,10 +181,6 @@ class ScramjetManager {
   }
 
   encodeUrl(url: string): string {
-    if (this.useV2) {
-      // V2 uses the same URL encoding scheme
-      return `${SCRAMJET_PREFIX}${encodeURIComponent(url)}`;
-    }
     if (!this.controller) {
       throw new Error("Scramjet is not initialised yet");
     }
@@ -241,16 +188,6 @@ class ScramjetManager {
   }
 
   decodeUrl(url: string): string {
-    if (this.useV2) {
-      try {
-        const encoded = url.startsWith(SCRAMJET_PREFIX)
-          ? url.substring(SCRAMJET_PREFIX.length)
-          : url;
-        return decodeURIComponent(encoded);
-      } catch {
-        return url;
-      }
-    }
     if (!this.controller) {
       throw new Error("Scramjet is not initialised yet");
     }
@@ -258,26 +195,6 @@ class ScramjetManager {
   }
 
   createFrame(iframe: HTMLIFrameElement): any {
-    if (this.useV2) {
-      // V2 doesn't have a createFrame method — we create the iframe src
-      // directly using encodeUrl. The SW handles the interception.
-      return {
-        go: (url: string) => {
-          iframe.src = this.encodeUrl(url);
-        },
-        back: () => {
-          try { iframe.contentWindow?.history.back(); } catch {}
-        },
-        forward: () => {
-          try { iframe.contentWindow?.history.forward(); } catch {}
-        },
-        reload: () => {
-          try { iframe.contentWindow?.location.reload(); } catch {}
-        },
-        addEventListener: (_t: string, _fn: (e: any) => void) => {},
-        removeEventListener: (_t: string, _fn: (e: any) => void) => {},
-      };
-    }
     if (!this.controller) {
       throw new Error("Scramjet is not initialised yet");
     }
@@ -287,6 +204,8 @@ class ScramjetManager {
 
 /**
  * Drop the `$scramjet` IndexedDB if it exists without its object stores.
+ * This prevents the "object store not found" error that occurs when the SW's
+ * loadConfig races the controller's init.
  */
 async function ensureFreshScramjetDB(): Promise<void> {
   const DB_NAME = "$scramjet";
