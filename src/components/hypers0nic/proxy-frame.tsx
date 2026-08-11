@@ -30,21 +30,36 @@ export function ProxyFrame() {
 
   // Subscribe to the ScramjetFrame once it exists. All state updates happen in
   // event callbacks (not the effect body), which keeps renders cascade-free.
+  // If createFrame fails, we retry up to 3 times with a delay before showing
+  // an error — this handles the race where the controller is technically
+  // "ready" but the internal state isn't fully set up.
   useEffect(() => {
     if (!ready || !iframeRef.current) return;
     const sj = getScramjet();
     let frame: typeof frameRef.current = null;
-    try {
-      frame = sj.createFrame(iframeRef.current);
-      frameRef.current = frame;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      queueMicrotask(() => {
-        setError(message);
-        setStatus("error");
-      });
-      return;
-    }
+    let cancelled = false;
+
+    const tryCreateFrame = (attempt: number) => {
+      if (cancelled) return;
+      try {
+        frame = sj.createFrame(iframeRef.current);
+        frameRef.current = frame;
+        setupFrameListeners();
+      } catch (err) {
+        if (attempt < 3 && !cancelled) {
+          setTimeout(() => tryCreateFrame(attempt + 1), 500 * (attempt + 1));
+        } else if (!cancelled) {
+          const message = err instanceof Error ? err.message : String(err);
+          queueMicrotask(() => {
+            setError(message);
+            setStatus("error");
+          });
+        }
+      }
+    };
+
+    const setupFrameListeners = () => {
+      if (!frame || cancelled) return;
 
     const onUrlChange = (e: any) => {
       const url = typeof e.url === "string" ? e.url : e.url?.href ?? "";
@@ -61,12 +76,16 @@ export function ProxyFrame() {
       if (url) setOmnibox(url);
     };
 
-    frame.addEventListener("urlchange", onUrlChange);
-    frame.addEventListener("navigate", onNavigate);
+      frame.addEventListener("urlchange", onUrlChange);
+      frame.addEventListener("navigate", onNavigate);
+    };
+
+    tryCreateFrame(0);
 
     return () => {
-      frame?.removeEventListener("urlchange", onUrlChange);
-      frame?.removeEventListener("navigate", onNavigate);
+      cancelled = true;
+      frame?.removeEventListener("urlchange", (e: any) => {});
+      frame?.removeEventListener("navigate", (e: any) => {});
     };
   }, [ready, setOmnibox]);
 

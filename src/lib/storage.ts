@@ -47,8 +47,17 @@ export function loadSettings(): Hypers0nicSettings {
     const raw = window.localStorage.getItem(SETTINGS_KEY);
     if (!raw) return DEFAULT_SETTINGS;
     const parsed = JSON.parse(raw) as Partial<Hypers0nicSettings>;
+    // Validate the parsed object is actually an object (not null/array/primitive)
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      console.warn("[hypers0nic] Corrupted settings, resetting to defaults");
+      window.localStorage.removeItem(SETTINGS_KEY);
+      return DEFAULT_SETTINGS;
+    }
     return deepMerge(DEFAULT_SETTINGS, parsed) as Hypers0nicSettings;
-  } catch {
+  } catch (err) {
+    // Corrupted JSON — clear it and return defaults
+    console.warn("[hypers0nic] Failed to parse settings, resetting:", err);
+    try { window.localStorage.removeItem(SETTINGS_KEY); } catch {}
     return DEFAULT_SETTINGS;
   }
 }
@@ -57,8 +66,19 @@ export function saveSettings(settings: Hypers0nicSettings) {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
-  } catch {
-    /* quota / privacy mode — fail quietly */
+  } catch (err) {
+    // Quota exceeded — try clearing old data first, then retry once
+    if (err instanceof DOMException && err.name === "QuotaExceededError") {
+      try {
+        // Clear non-critical data to make room
+        window.localStorage.removeItem(HISTORY_KEY);
+        window.localStorage.removeItem(FOCUS_SESSIONS_KEY);
+        window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+      } catch {
+        /* still failed — settings won't persist, but app still works */
+      }
+    }
+    /* privacy mode — fail quietly */
   }
 }
 
@@ -66,8 +86,18 @@ export function loadHistory(): HistoryEntry[] {
   if (typeof window === "undefined") return [];
   try {
     const raw = window.localStorage.getItem(HISTORY_KEY);
-    return raw ? (JSON.parse(raw) as HistoryEntry[]) : [];
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    // Validate it's an array of objects with the expected shape
+    if (!Array.isArray(parsed)) {
+      window.localStorage.removeItem(HISTORY_KEY);
+      return [];
+    }
+    return parsed.filter(
+      (h: any) => h && typeof h.url === "string" && typeof h.title === "string"
+    ) as HistoryEntry[];
   } catch {
+    try { window.localStorage.removeItem(HISTORY_KEY); } catch {}
     return [];
   }
 }

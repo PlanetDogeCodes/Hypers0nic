@@ -198,14 +198,23 @@ export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
     set({ view: "proxy", omniboxValue: target, loading: true });
 
     // Boot scramjet lazily on first navigation. The promise is memoised inside
-    // the manager so subsequent navigations are instant.
+    // the manager so subsequent navigations are instant. If init fails, we
+    // force-reconnect and retry once before giving up.
     const sj = getScramjet();
     try {
       await sj.init(settings.wispUrl);
     } catch (err) {
-      console.error("[hypers0nic] scramjet init failed:", err);
-      set({ loading: false });
-      return;
+      console.error("[hypers0nic] scramjet init failed, retrying:", err);
+      // Force reconnect and retry — this handles the case where the transport
+      // silently dropped (e.g., wisp relay restarted).
+      sj.forceReconnect();
+      try {
+        await sj.init(settings.wispUrl);
+      } catch (err2) {
+        console.error("[hypers0nic] scramjet init failed on retry:", err2);
+        set({ loading: false });
+        return;
+      }
     }
     // Make sure the service worker is up before we ask it to intercept.
     if (!swRegistered) {
