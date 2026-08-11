@@ -47,8 +47,6 @@ class ScramjetManager {
   private listeners = new Set<Listener>();
   private initPromise: Promise<void> | null = null;
   private bundleLoaded = false;
-  private transportConn: any = null;
-  private transportUrl: string | null = null;
 
   subscribe(listener: Listener): () => void {
     this.listeners.add(listener);
@@ -142,24 +140,8 @@ class ScramjetManager {
   }
 
   private async setupTransport(wispUrl: string): Promise<void> {
-    // Reuse existing transport if it's already connected to the same URL.
-    // This prevents zombie WebSocket connections when init is called multiple
-    // times (e.g., auto-warm on page load + first navigation).
-    if (this.transportConn && this.transportUrl === wispUrl) {
-      return;
-    }
-
     const { BareMuxConnection } = await import("@mercuryworkshop/bare-mux");
-
-    // Create a single connection instance that we reuse across relay candidates.
-    // The bare-mux SharedWorker is identified by its URL, so multiple
-    // BareMuxConnection objects pointing at the same worker URL will share
-    // the underlying SharedWorker. But setTransport replaces the previous
-    // transport, so we only need one connection.
-    if (!this.transportConn) {
-      this.transportConn = new BareMuxConnection("/baremux/worker.js");
-    }
-    const conn = this.transportConn;
+    const conn = new BareMuxConnection("/baremux/worker.js");
 
     const localRelay = this.resolveLocalRelay();
     const candidates = [wispUrl, ...FALLBACK_WISP_SERVERS, localRelay].filter(
@@ -179,7 +161,6 @@ class ScramjetManager {
           )
         );
         await Promise.race([transportPromise, timeoutPromise]);
-        this.transportUrl = candidate;
         return;
       } catch (err) {
         console.warn(`[hypers0nic] transport failed for ${candidate}:`, err);
@@ -191,19 +172,6 @@ class ScramjetManager {
         lastError instanceof Error ? lastError.message : String(lastError)
       }`
     );
-  }
-
-  /**
-   * Force reconnect the transport. Called when a dead connection is detected.
-   * Resets the init promise so the next init() call will re-establish the
-   * transport from scratch.
-   */
-  forceReconnect(): void {
-    this.initPromise = null;
-    this.transportUrl = null;
-    this.controller = null;
-    this.bundleLoaded = false;
-    this.setState({ status: "idle" });
   }
 
   private resolveLocalRelay(): string {

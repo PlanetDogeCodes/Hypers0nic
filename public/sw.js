@@ -192,26 +192,9 @@ function healScramjetDB() {
   });
 }
 
-// Safe loadConfig wrapper — heals the DB if the transaction fails, and
-// validates the config has the expected prefix to detect stale/v2 configs.
+// Safe loadConfig wrapper — heals the DB if the transaction fails
 function safeLoadConfig() {
   return scramjet.loadConfig().then(function() {
-    // Validate the config is compatible — check that it has the expected
-    // prefix. If a v2 config was written to the DB (which uses a different
-    // format), the prefix check will fail and we'll heal the DB.
-    if (scramjet.config && scramjet.config.prefix !== PROXY_PREFIX) {
-      console.warn("[hypers0nic/sw] Stale config detected (prefix mismatch), healing DB");
-      configLoaded = false;
-      return healScramjetDB().then(function() {
-        return new Promise(function(resolve) { setTimeout(resolve, 500); });
-      }).then(function() {
-        return scramjet.loadConfig().then(function() {
-          configLoaded = true;
-        }).catch(function() {
-          configLoaded = false;
-        });
-      });
-    }
     configLoaded = true;
   }).catch(function(err) {
     // If it's the "object store not found" error, try healing the DB
