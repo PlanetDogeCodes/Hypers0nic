@@ -1,47 +1,17 @@
 /*
  * Hypers0nic service worker.
  *
- * Tries Scramjet v2 first, falls back to v1. Includes ad/tracker blocking,
+ * Hosts the Scramjet interception layer with ad/tracker blocking,
  * search result link rewriting, and robust retry logic.
- *
- * The "negotiating wisp" hang is prevented by:
- * 1. A 30-second hard timeout on the entire fetch handler
- * 2. Retry logic with exponential backoff (5 attempts)
- * 3. Graceful fallback to network if Scramjet fails
  */
 importScripts("/scramjet/scramjet.all.js");
 
-// V1 API (always available as fallback)
-var scramjetV1 = null;
-var scramjetV2 = null;
-var useV2 = false;
-
-// Try to load v2
-try {
-  importScripts("/scramjet/scramjet.v2.js");
-  if (self.$scramjet && self.$scramjet.ScramjetFetchHandler) {
-    scramjetV2 = new self.$scramjet.ScramjetFetchHandler();
-    useV2 = true;
-    console.log("[hypers0nic/sw] Using Scramjet v2");
-  }
-} catch (e) {
-  console.warn("[hypers0nic/sw] v2 load failed, falling back to v1:", e);
-}
-
-// Initialize v1 as fallback
-if (!useV2 && self.$scramjetLoadWorker) {
-  try {
-    var v1Factory = self.$scramjetLoadWorker();
-    scramjetV1 = new v1Factory.ScramjetServiceWorker();
-    console.log("[hypers0nic/sw] Using Scramjet v1");
-  } catch (e) {
-    console.error("[hypers0nic/sw] v1 init failed:", e);
-  }
-}
-
-var PROXY_PREFIX = "/service/";
+const { ScramjetServiceWorker } = self.$scramjetLoadWorker();
+const scramjet = new ScramjetServiceWorker();
+const PROXY_PREFIX = "/service/";
 
 // --- Ad/tracker blocker ---
+// Conservative blocklist of well-known ad and tracker domains.
 var AD_BLOCK_DOMAINS = [
   "doubleclick.net","googlesyndication.com","googleadservices.com",
   "google-analytics.com","googletagmanager.com","googletagservices.com",
@@ -65,6 +35,9 @@ var AD_BLOCK_DOMAINS = [
   "trafficjunky.com","trafficstars.com","ero-advertising.com",
 ];
 
+// CSS injected into proxied pages to hide common ad elements.
+// Uses specific selectors only — no broad wildcard matches that could
+// hide legitimate content like "add-comment" or "address-card".
 var AD_BLOCK_CSS = '<style>' +
   'ins.adsbygoogle,div.adsbygoogle,' +
   'iframe[src*="doubleclick.net"],' +
@@ -82,8 +55,13 @@ var AD_BLOCK_CSS = '<style>' +
   '{display:none!important;visibility:hidden!important;opacity:0!important;}' +
   '</style>';
 
+// Script injected into proxied pages to:
+// 1. Block fetch/XHR requests to known ad/tracker domains
+// 2. Rewrite absolute-URL links and window.open to go through the proxy
+// Only intercepts absolute http/https URLs — Scramjet handles relative URLs.
 var INJECT_SCRIPT = '<script>' +
   '(function(){' +
+  // --- Ad blocker: override fetch and XHR ---
   'var blockedDomains=' + JSON.stringify(AD_BLOCK_DOMAINS) + ';' +
   'function isAdDomain(urlStr){' +
     'try{var u=new URL(urlStr,location.href);var h=u.hostname;' +
@@ -91,12 +69,14 @@ var INJECT_SCRIPT = '<script>' +
       'if(h===blockedDomains[i]||h.endsWith("."+blockedDomains[i]))return true;' +
     '}return false;}catch(e){return false;}' +
   '}' +
+  // Override fetch
   'var origFetch=window.fetch;' +
   'window.fetch=function(input,init){' +
     'var url=typeof input==="string"?input:(input&&input.url)||"";' +
     'if(isAdDomain(url))return Promise.resolve(new Response("",{status:204}));' +
     'return origFetch.apply(this,arguments);' +
   '};' +
+  // Override XHR open/send
   'var origOpen=XMLHttpRequest.prototype.open;' +
   'XMLHttpRequest.prototype.open=function(method,url){' +
     'if(isAdDomain(url)){this._blocked=true;return;}' +
@@ -115,6 +95,7 @@ var INJECT_SCRIPT = '<script>' +
     '}' +
     'return origSend.apply(this,arguments);' +
   '};' +
+  // --- Link rewriting: only intercept absolute URLs ---
   'function rewriteUrl(url){' +
     'if(!url||url.startsWith("javascript:")||url.startsWith("mailto:")||' +
        'url.startsWith("tel:")||url.startsWith("#")||url.startsWith("data:")||' +
@@ -123,8 +104,10 @@ var INJECT_SCRIPT = '<script>' +
     'if(url.startsWith("//"))return "/service/"+encodeURIComponent("https:"+url);' +
     'return url;' +
   '}' +
+  // Intercept window.open
   'var origOpen=window.open;' +
   'window.open=function(url,target,features){if(url)url=rewriteUrl(url);return origOpen.call(this,url,target,features);};' +
+  // Intercept link clicks — only for absolute http/https URLs
   'document.addEventListener("click",function(e){' +
     'var a=e.target;while(a&&a.tagName!=="A")a=a.parentElement;' +
     'if(a&&a.href&&(a.href.startsWith("http://")||a.href.startsWith("https://"))){' +
@@ -140,69 +123,83 @@ var INJECT_SCRIPT = '<script>' +
   '})();' +
   '</script>';
 
-self.addEventListener("install", function() { self.skipWaiting(); });
-self.addEventListener("activate", function(event) { event.waitUntil(self.clients.claim()); });
+self.addEventListener("install", function() {
+  self.skipWaiting();
+});
+
+self.addEventListener("activate", function(event) {
+  event.waitUntil(self.clients.claim());
+});
+
 self.addEventListener("message", function(event) {
   if (event.data === "skipWaiting") self.skipWaiting();
 });
 
+// Check if a URL's hostname matches any blocked ad/tracker domain
 function isAdRequest(urlStr) {
   try {
     var u = new URL(urlStr);
     var host = u.hostname;
     for (var i = 0; i < AD_BLOCK_DOMAINS.length; i++) {
-      if (host === AD_BLOCK_DOMAINS[i] || host.endsWith("." + AD_BLOCK_DOMAINS[i])) return true;
+      if (host === AD_BLOCK_DOMAINS[i] || host.endsWith("." + AD_BLOCK_DOMAINS[i])) {
+        return true;
+      }
     }
     return false;
-  } catch (e) { return false; }
+  } catch (e) {
+    return false;
+  }
 }
 
+// Check if a response is HTML
 function isHtmlResponse(response) {
   var ct = response.headers.get("content-type") || "";
   return ct.indexOf("text/html") !== -1 || ct.indexOf("application/xhtml") !== -1;
 }
 
+// Inject CSS and script into an HTML response.
+// Preserves all headers except Content-Length (which changes after injection).
+// Skips injection for responses larger than 5MB to avoid memory issues.
 function injectIntoHtml(response) {
   var contentLength = parseInt(response.headers.get("content-length") || "0", 10);
-  if (contentLength > 5 * 1024 * 1024) return Promise.resolve(response);
+  if (contentLength > 5 * 1024 * 1024) {
+    return Promise.resolve(response);
+  }
+
   return response.text().then(function(html) {
+    // Skip empty or very small responses
     if (!html || html.length < 50) return response;
+
     var injection = AD_BLOCK_CSS + INJECT_SCRIPT;
-    if (html.indexOf("<head>") !== -1) html = html.replace("<head>", "<head>" + injection);
-    else if (html.indexOf("<head ") !== -1) html = html.replace(/<head([^>]*)>/, "<head$1>" + injection);
-    else if (html.indexOf("<html") !== -1) html = html.replace(/<html([^>]*)>/, "<html$1>" + injection);
-    else html = injection + html;
+
+    // Inject right after <head> or at the start of <html>
+    if (html.indexOf("<head>") !== -1) {
+      html = html.replace("<head>", "<head>" + injection);
+    } else if (html.indexOf("<head ") !== -1) {
+      html = html.replace(/<head([^>]*)>/, "<head$1>" + injection);
+    } else if (html.indexOf("<html") !== -1) {
+      html = html.replace(/<html([^>]*)>/, "<html$1>" + injection);
+    } else {
+      html = injection + html;
+    }
+
+    // Clone headers but remove Content-Length (it's now wrong)
     var newHeaders = new Headers();
     response.headers.forEach(function(value, key) {
-      if (key.toLowerCase() !== "content-length") newHeaders.set(key, value);
+      if (key.toLowerCase() !== "content-length") {
+        newHeaders.set(key, value);
+      }
     });
-    return new Response(html, { status: response.status, statusText: response.statusText, headers: newHeaders });
-  }).catch(function() { return response; });
-}
 
-// Unified scramjet interface — works with both v1 and v2
-var sj = {
-  loadConfig: function() {
-    if (useV2 && scramjetV2) return scramjetV2.loadConfig();
-    if (scramjetV1) return scramjetV1.loadConfig();
-    return Promise.resolve();
-  },
-  route: function(event) {
-    if (useV2 && scramjetV2) return scramjetV2.route(event);
-    if (scramjetV1) return scramjetV1.route(event);
-    return false;
-  },
-  fetch: function(event) {
-    if (useV2 && scramjetV2) return scramjetV2.fetch(event);
-    if (scramjetV1) return scramjetV1.fetch(event);
-    return fetch(event.request);
-  },
-  get config() {
-    if (useV2 && scramjetV2) return scramjetV2.config;
-    if (scramjetV1) return scramjetV1.config;
-    return null;
-  }
-};
+    return new Response(html, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: newHeaders,
+    });
+  }).catch(function() {
+    return response;
+  });
+}
 
 self.addEventListener("fetch", function(event) {
   var url = new URL(event.request.url);
@@ -215,22 +212,34 @@ self.addEventListener("fetch", function(event) {
       var delay = 400;
       for (var i = 0; i < maxAttempts; i++) {
         try {
-          await sj.loadConfig();
-          if (sj.route(event)) {
-            var response = await sj.fetch(event);
+          await scramjet.loadConfig();
+          if (scramjet.route(event)) {
+            var response = await scramjet.fetch(event);
 
-            // Block ad/tracker requests at network level
+            // Check if this is an ad/tracker request and block it at the network level
             var encodedUrl = url.pathname.substring(PROXY_PREFIX.length);
             var decodedUrl;
-            try { decodedUrl = decodeURIComponent(encodedUrl); } catch(e) { decodedUrl = encodedUrl; }
+            try {
+              decodedUrl = decodeURIComponent(encodedUrl);
+            } catch (e) {
+              decodedUrl = encodedUrl;
+            }
             if (isAdRequest(decodedUrl)) {
-              return new Response("", { status: 204, headers: { "Content-Type": "text/plain" } });
+              return new Response("", {
+                status: 204,
+                headers: { "Content-Type": "text/plain" },
+              });
             }
 
-            // Inject ad blocker + link rewriter into HTML responses
+            // For HTML responses, inject ad blocker CSS + link rewriting script
             if (response && response.ok && isHtmlResponse(response)) {
-              try { return await injectIntoHtml(response); } catch(e) { return response; }
+              try {
+                return await injectIntoHtml(response);
+              } catch (e) {
+                return response;
+              }
             }
+
             return response;
           }
           return await fetch(event.request);
@@ -240,15 +249,16 @@ self.addEventListener("fetch", function(event) {
             continue;
           }
           console.error("[hypers0nic/sw] scramjet error after retries:", err);
-          // Last resort: try to fetch directly (may work for simple sites)
-          try { return await fetch(event.request); } catch(e) {}
           return new Response(
             "Scramjet proxy error: " + (err && err.message || err),
             { status: 502, headers: { "Content-Type": "text/plain" } }
           );
         }
       }
-      return new Response("Scramjet proxy timed out.", { status: 504, headers: { "Content-Type": "text/plain" } });
+      return new Response("Scramjet proxy timed out.", {
+        status: 504,
+        headers: { "Content-Type": "text/plain" },
+      });
     })()
   );
 });

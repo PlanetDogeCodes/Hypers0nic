@@ -78,5 +78,4 @@ The service worker intercepts all `/service/*` requests, decodes the target URL,
 - @mercuryworkshop/wisp-js v0.4.1
 
 ## License
-
-MIT
+Apache 2.0
