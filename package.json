@@ -1,6 +1,6 @@
 {
-  "name": "nextjs_tailwind_shadcn_ts",
-  "version": "0.2.1",
+  "name": "hypers0nic",
+  "version": "1.0.0",
   "private": true,
   "scripts": {
     "dev": "next dev -p 3000 2>&1 | tee dev.log",
@@ -19,7 +19,7 @@
     "@hookform/resolvers": "^5.1.1",
     "@mdxeditor/editor": "^3.39.1",
     "@mercuryworkshop/epoxy-transport": "2.1.28",
-    "@mercuryworkshop/scramjet": "^1.1.0",
+    "@mercuryworkshop/scramjet": "^2.0.67-alpha.2",
     "@mercuryworkshop/wisp-js": "^0.4.1",
     "@prisma/client": "^6.11.1",
     "@radix-ui/react-accordion": "^1.2.11",

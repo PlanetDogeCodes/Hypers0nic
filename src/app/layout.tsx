@@ -45,6 +45,10 @@ export default function RootLayout({
       <body
         className={`${geistMono.variable} antialiased bg-background text-foreground`}
       >
+        {/* Preload critical proxy assets for faster first navigation */}
+        <link rel="preload" href="/scramjet/scramjet.v2.js" as="script" />
+        <link rel="preload" href="/scramjet/scramjet.all.js" as="script" />
+        <link rel="preload" href="/baremux/worker.js" as="script" />
         {children}
         <Toaster />
         <SonnerToaster

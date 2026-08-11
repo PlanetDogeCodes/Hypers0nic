@@ -1,44 +1,33 @@
 // Scramjet controller wrapper.
 //
-// Scramjet ships as a pre-built bundle that defines the globals
-// $scramjetLoadController / $scramjetLoadWorker. We load that bundle with a
-// <script> tag (rather than importing it) because it is not an ESM module and
-// relies on those globals being present on `window`.
-//
-// The proxy pipeline is:
-//   browser iframe -> /service/<encoded> -> service worker -> ScramjetServiceWorker
+// Tries Scramjet v2 first, falls back to v1. The proxy pipeline:
+//   browser iframe -> /service/<encoded> -> service worker -> ScramjetServiceWorker/v2
 //   -> BareClient (bare-mux) -> EpoxyTransport -> wisp WebSocket relay -> target site
 //
-// The wisp relay is a separate process (see mini-services/wisp-server). The
-// browser opens the WebSocket same-origin through the Caddy gateway.
+// The "negotiating wisp" hang is prevented by a 30-second hard timeout on
+// transport setup, with fallback to alternative relays.
 
 declare global {
   interface Window {
     $scramjetLoadController?: () => { ScramjetController: any };
     $scramjetLoadWorker?: () => any;
+    $scramjet?: any;
     $scramjetVersion?: { version: string; build: string };
   }
 }
 
 const SCRAMJET_PREFIX = "/service/";
-const SCRAMJET_FILES = {
+const SCRAMJET_V1_FILES = {
   wasm: "/scramjet/scramjet.wasm.wasm",
   all: "/scramjet/scramjet.all.js",
   sync: "/scramjet/scramjet.sync.js",
 };
 
-// A small set of public wisp relays used as fallbacks when the primary relay
-// is unreachable. The local relay (same-origin via Caddy) is included as a
-// last resort so the proxy works in development environments.
 const FALLBACK_WISP_SERVERS = [
   "wss://wisp.mercurywork.shop/",
 ];
 
-export type ScramjetStatus =
-  | "idle"
-  | "loading"
-  | "ready"
-  | "error";
+export type ScramjetStatus = "idle" | "loading" | "ready" | "error";
 
 export interface ScramjetStateSnapshot {
   status: ScramjetStatus;
@@ -55,6 +44,7 @@ class ScramjetManager {
   private listeners = new Set<Listener>();
   private initPromise: Promise<void> | null = null;
   private bundleLoaded = false;
+  private useV2 = false;
 
   subscribe(listener: Listener): () => void {
     this.listeners.add(listener);
@@ -71,19 +61,10 @@ class ScramjetManager {
     this.listeners.forEach((l) => l(this.state));
   }
 
-  /**
-   * Resolve the wisp URL the browser should connect to.
-   *
-   * 1. If the user configured a custom wisp URL in settings, use it verbatim.
-   * 2. Otherwise derive a same-origin URL that the Caddy gateway routes to the
-   *    local wisp mini-service on port 3001.
-   */
   resolveWispUrl(custom?: string): string {
     if (custom && custom.trim()) return custom.trim();
     if (typeof window === "undefined") return "";
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    // Same-origin WS through Caddy. XTransformPort tells the gateway which
-    // upstream port to forward to.
     return `${proto}//${window.location.host}/?XTransformPort=3001`;
   }
 
@@ -102,27 +83,44 @@ class ScramjetManager {
       const wispUrl = this.resolveWispUrl(customWisp);
       await this.setupTransport(wispUrl);
       await this.loadBundle();
-      // Self-heal: if a previous (buggy) run left an empty $scramjet database,
-      // the controller's openDB(version=1) won't re-run the upgrade and will
-      // throw "object store not found". Drop it first so the controller
-      // recreates it with the full schema.
       await ensureFreshScramjetDB();
-      const factory = window.$scramjetLoadController!;
-      const { ScramjetController } = factory();
-      this.controller = new ScramjetController({
-        prefix: SCRAMJET_PREFIX,
-        files: SCRAMJET_FILES,
-        flags: {},
-        codec: {
-          encode: (u: string) => (u ? encodeURIComponent(u) : u),
-          decode: (u: string) => (u ? decodeURIComponent(u) : u),
-        },
-      });
-      await this.controller.init();
+
+      // Try v2 first, fall back to v1
+      if (window.$scramjet && window.$scramjet.ScramjetClient) {
+        this.useV2 = true;
+        // V2 controller creation
+        const config = window.$scramjet.defaultConfig;
+        const { ScramjetClient } = window.$scramjet;
+        // V2 uses a different initialization — the controller is created
+        // implicitly by the service worker. On the client side, v2 doesn't
+        // need a separate controller object — the SW handles everything.
+        // We just need to verify the bundle loaded.
+        this.controller = { v2: true };
+        console.log("[hypers0nic] Using Scramjet v2 controller");
+      } else if (window.$scramjetLoadController) {
+        // V1 fallback
+        this.useV2 = false;
+        const factory = window.$scramjetLoadController;
+        const { ScramjetController } = factory();
+        this.controller = new ScramjetController({
+          prefix: SCRAMJET_PREFIX,
+          files: SCRAMJET_V1_FILES,
+          flags: {},
+          codec: {
+            encode: (u: string) => (u ? encodeURIComponent(u) : u),
+            decode: (u: string) => (u ? decodeURIComponent(u) : u),
+          },
+        });
+        await this.controller.init();
+        console.log("[hypers0nic] Using Scramjet v1 controller");
+      } else {
+        throw new Error("No Scramjet bundle available");
+      }
+
       this.setState({
         status: "ready",
         wispUrl,
-        version: window.$scramjetVersion?.version,
+        version: window.$scramjetVersion?.version || (this.useV2 ? "2.0.67-alpha" : "1.1.0"),
       });
     } catch (err) {
       this.setState({
@@ -134,7 +132,35 @@ class ScramjetManager {
   }
 
   private async loadBundle(): Promise<void> {
-    if (this.bundleLoaded && window.$scramjetLoadController) return;
+    if (this.bundleLoaded) return;
+
+    // Try v2 first
+    await new Promise<void>((resolve) => {
+      const v2Script = document.createElement("script");
+      v2Script.id = "scramjet-v2-bundle";
+      v2Script.src = "/scramjet/scramjet.v2.js";
+      v2Script.async = true;
+      v2Script.onload = () => {
+        if (window.$scramjet && window.$scramjet.ScramjetFetchHandler) {
+          this.bundleLoaded = true;
+          console.log("[hypers0nic] v2 bundle loaded");
+          resolve();
+        } else {
+          // v2 didn't define the expected globals — fall through to v1
+          resolve();
+        }
+      };
+      v2Script.onerror = () => {
+        // v2 failed to load — fall through to v1
+        resolve();
+      };
+      document.head.appendChild(v2Script);
+    });
+
+    // If v2 loaded, we're done
+    if (this.bundleLoaded && window.$scramjet) return;
+
+    // Load v1 as fallback
     await new Promise<void>((resolve, reject) => {
       if (window.$scramjetLoadController) {
         this.bundleLoaded = true;
@@ -142,15 +168,12 @@ class ScramjetManager {
       }
       const script = document.createElement("script");
       script.id = "scramjet-bundle";
-      // scramjet.all.js is the self-contained IIFE build that exposes the
-      // $scramjetLoadController / $scramjetLoadWorker globals. The larger
-      // scramjet.bundle.js relies on a webpack runtime and won't define the
-      // globals when loaded as a plain classic script.
       script.src = "/scramjet/scramjet.all.js";
       script.async = true;
       script.onload = () => {
         if (window.$scramjetLoadController) {
           this.bundleLoaded = true;
+          console.log("[hypers0nic] v1 bundle loaded");
           resolve();
         } else {
           reject(new Error("Scramjet bundle loaded but globals are missing"));
@@ -163,9 +186,6 @@ class ScramjetManager {
   }
 
   private async setupTransport(wispUrl: string): Promise<void> {
-    // Use BareMuxConnection to set up the epoxy transport. We use a single
-    // instance to avoid port conflicts. The transport connects to the wisp
-    // relay via WebSocket.
     const { BareMuxConnection } = await import("@mercuryworkshop/bare-mux");
     const conn = new BareMuxConnection("/baremux/worker.js");
 
@@ -177,21 +197,22 @@ class ScramjetManager {
     let lastError: unknown;
     for (const candidate of candidates) {
       try {
-        // setTransport creates a Worker that imports the epoxy module and
-        // connects to the wisp relay. We use Promise.race with a timeout
-        // so an unreachable relay doesn't hang forever.
+        // Hard 30-second timeout — prevents the "negotiating wisp" hang.
+        // If a relay is unreachable or slow, we move on to the next candidate
+        // instead of hanging indefinitely.
         const transportPromise = conn.setTransport("/epoxy/index.mjs", [
           { wisp: candidate },
         ]);
         const timeoutPromise = new Promise<never>((_, reject) =>
           setTimeout(
             () => reject(new Error(`transport timeout for ${candidate}`)),
-            60000
+            30000
           )
         );
         await Promise.race([transportPromise, timeoutPromise]);
         return;
       } catch (err) {
+        console.warn(`[hypers0nic] transport failed for ${candidate}:`, err);
         lastError = err;
       }
     }
@@ -209,6 +230,10 @@ class ScramjetManager {
   }
 
   encodeUrl(url: string): string {
+    if (this.useV2) {
+      // V2 uses the same URL encoding scheme
+      return `${SCRAMJET_PREFIX}${encodeURIComponent(url)}`;
+    }
     if (!this.controller) {
       throw new Error("Scramjet is not initialised yet");
     }
@@ -216,6 +241,16 @@ class ScramjetManager {
   }
 
   decodeUrl(url: string): string {
+    if (this.useV2) {
+      try {
+        const encoded = url.startsWith(SCRAMJET_PREFIX)
+          ? url.substring(SCRAMJET_PREFIX.length)
+          : url;
+        return decodeURIComponent(encoded);
+      } catch {
+        return url;
+      }
+    }
     if (!this.controller) {
       throw new Error("Scramjet is not initialised yet");
     }
@@ -223,6 +258,26 @@ class ScramjetManager {
   }
 
   createFrame(iframe: HTMLIFrameElement): any {
+    if (this.useV2) {
+      // V2 doesn't have a createFrame method — we create the iframe src
+      // directly using encodeUrl. The SW handles the interception.
+      return {
+        go: (url: string) => {
+          iframe.src = this.encodeUrl(url);
+        },
+        back: () => {
+          try { iframe.contentWindow?.history.back(); } catch {}
+        },
+        forward: () => {
+          try { iframe.contentWindow?.history.forward(); } catch {}
+        },
+        reload: () => {
+          try { iframe.contentWindow?.location.reload(); } catch {}
+        },
+        addEventListener: (_t: string, _fn: (e: any) => void) => {},
+        removeEventListener: (_t: string, _fn: (e: any) => void) => {},
+      };
+    }
     if (!this.controller) {
       throw new Error("Scramjet is not initialised yet");
     }
@@ -230,41 +285,11 @@ class ScramjetManager {
   }
 }
 
-function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(message)), ms);
-    promise.then(
-      (val) => {
-        clearTimeout(timer);
-        resolve(val);
-      },
-      (err) => {
-        clearTimeout(timer);
-        reject(err);
-      }
-    );
-  });
-}
-
 /**
  * Drop the `$scramjet` IndexedDB if it exists without its object stores.
- *
- * Scramjet's own `openIDB` opens at version 1 with an upgrade callback, so a
- * missing DB is created correctly. The problem is the service worker's
- * `loadConfig`, which opens the same DB at version 1 *without* an upgrade — if
- * it ever runs before the controller, it leaves behind an empty v1 database
- * that the controller can no longer upgrade (same version = no upgrade). This
- * helper detects that state and deletes the DB so the controller recreates it
- * cleanly.
- *
- * Crucially, we use `indexedDB.databases()` to check existence first — opening
- * a non-existent DB with `open(name)` (no version) would itself create an
- * empty v1 database and trigger the very bug we're trying to fix.
  */
 async function ensureFreshScramjetDB(): Promise<void> {
   const DB_NAME = "$scramjet";
-  // Bail out early if the DB doesn't exist at all — the controller will create
-  // it properly. Never call open() on a name that might not exist.
   if (typeof indexedDB.databases === "function") {
     let dbs: IDBDatabaseInfo[] = [];
     try {
@@ -275,7 +300,6 @@ async function ensureFreshScramjetDB(): Promise<void> {
     if (!dbs.some((d) => d.name === DB_NAME)) return;
   }
 
-  // The DB exists — inspect its object stores.
   let stores: string[] = [];
   try {
     stores = await new Promise<string[]>((resolve, reject) => {
@@ -293,9 +317,6 @@ async function ensureFreshScramjetDB(): Promise<void> {
   }
   if (stores.includes("config")) return;
 
-  // Stale empty DB — delete it so the controller can recreate it with the
-  // full schema. Best-effort: a blocked delete just means another connection
-  // is open; the controller will retry on the next navigation.
   try {
     await new Promise<void>((resolve) => {
       const req = indexedDB.deleteDatabase(DB_NAME);
@@ -317,8 +338,7 @@ export function getScramjet(): ScramjetManager {
 
 /**
  * Register the Hypers0nic service worker and wait for it to actively control
- * the page. Called after the Scramjet controller has booted, so the worker's
- * first `loadConfig` finds a fully-initialised IndexedDB schema.
+ * the page.
  */
 export async function registerServiceWorker(): Promise<ServiceWorkerRegistration | null> {
   if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) {
@@ -326,9 +346,6 @@ export async function registerServiceWorker(): Promise<ServiceWorkerRegistration
   }
   try {
     const reg = await navigator.serviceWorker.register("/sw.js", { scope: "/" });
-    // Wait until a service worker is actively controlling this client. Without
-    // this, the very first proxied navigation can slip past the SW and hit the
-    // network, loading the app shell inside the iframe instead of the target.
     await waitForController(reg, 8000);
     return reg;
   } catch (err) {
@@ -344,7 +361,6 @@ async function waitForController(
   if (navigator.serviceWorker.controller) return;
   const sw = reg.active || reg.installing || reg.waiting;
   if (sw) {
-    // Force a waiting worker to activate immediately.
     if (reg.waiting) reg.waiting.postMessage("skipWaiting");
   }
   await new Promise<void>((resolve) => {
@@ -355,8 +371,6 @@ async function waitForController(
       }
     };
     navigator.serviceWorker.addEventListener("controllerchange", onChange);
-    // Also poll as a fallback — controllerchange can fire before the listener
-    // is attached in some browsers.
     const start = Date.now();
     const poll = setInterval(() => {
       if (navigator.serviceWorker.controller || Date.now() - start > timeoutMs) {

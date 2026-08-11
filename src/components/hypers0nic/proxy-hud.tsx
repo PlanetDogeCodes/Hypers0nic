@@ -101,7 +101,6 @@ function useScramblingIp(active: boolean): string {
 
   useEffect(() => {
     if (!active) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setIp("•••.•••.•••.•••");
       return;
     }
