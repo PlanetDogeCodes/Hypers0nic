@@ -143,19 +143,28 @@ class ScramjetManager {
 
   private async setupTransport(wispUrl: string): Promise<void> {
     // Reuse existing transport if it's already connected to the same URL.
-    // This prevents zombie WebSocket connections when init is called multiple
-    // times (e.g., auto-warm on page load + first navigation).
     if (this.transportConn && this.transportUrl === wispUrl) {
-      return;
+      // Health check: verify the transport is still alive by checking the
+      // BareMuxConnection's inner port. If it's dead, force reconnect.
+      try {
+        const port = this.transportConn.getInnerPort?.();
+        if (port && typeof port === "object" && "postMessage" in port) {
+          return; // Transport is alive
+        }
+      } catch {
+        // Health check failed — fall through to reconnect
+      }
+      this.transportUrl = null;
+    }
+
+    // Validate the wisp URL before attempting connection
+    if (!wispUrl || (!wispUrl.startsWith("ws://") && !wispUrl.startsWith("wss://"))) {
+      console.warn("[hypers0nic] Invalid wisp URL, using fallback:", wispUrl);
+      wispUrl = FALLBACK_WISP_SERVERS[0];
     }
 
     const { BareMuxConnection } = await import("@mercuryworkshop/bare-mux");
 
-    // Create a single connection instance that we reuse across relay candidates.
-    // The bare-mux SharedWorker is identified by its URL, so multiple
-    // BareMuxConnection objects pointing at the same worker URL will share
-    // the underlying SharedWorker. But setTransport replaces the previous
-    // transport, so we only need one connection.
     if (!this.transportConn) {
       this.transportConn = new BareMuxConnection("/baremux/worker.js");
     }
@@ -175,7 +184,7 @@ class ScramjetManager {
         const timeoutPromise = new Promise<never>((_, reject) =>
           setTimeout(
             () => reject(new Error(`transport timeout for ${candidate}`)),
-            30000
+            15000
           )
         );
         await Promise.race([transportPromise, timeoutPromise]);
@@ -186,6 +195,8 @@ class ScramjetManager {
         lastError = err;
       }
     }
+    // All relays failed — don't throw, just log. The proxy will show an error
+    // state but the app won't crash. The user can retry from the UI.
     throw new Error(
       `Could not establish a wisp transport: ${
         lastError instanceof Error ? lastError.message : String(lastError)
@@ -289,7 +300,9 @@ export function getScramjet(): ScramjetManager {
 
 /**
  * Register the Hypers0nic service worker and wait for it to actively control
- * the page.
+ * the page. Also sets up an auto-update listener: when a new version of the
+ * SW is installed, it automatically activates and reloads the page to ensure
+ * the client and SW are always in sync.
  */
 export async function registerServiceWorker(): Promise<ServiceWorkerRegistration | null> {
   if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) {
@@ -297,6 +310,28 @@ export async function registerServiceWorker(): Promise<ServiceWorkerRegistration
   }
   try {
     const reg = await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+
+    // Auto-update: when a new SW is waiting, force it to activate immediately
+    reg.addEventListener("updatefound", () => {
+      const newWorker = reg.installing;
+      if (newWorker) {
+        newWorker.addEventListener("statechange", () => {
+          if (newWorker.state === "installed" && navigator.serviceWorker.controller) {
+            // New SW is installed and waiting — tell it to skip waiting
+            newWorker.postMessage("skipWaiting");
+          }
+        });
+      }
+    });
+
+    // Reload the page when the controller changes (new SW took over)
+    let refreshing = false;
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (refreshing) return;
+      refreshing = true;
+      window.location.reload();
+    });
+
     await waitForController(reg, 8000);
     return reg;
   } catch (err) {

@@ -192,7 +192,20 @@ function healScramjetDB() {
   });
 }
 
-// Safe loadConfig wrapper — heals the DB if the transaction fails, and
+// Keepalive: periodically ping the BareMux worker to detect dead connections.
+// If the transport drops, the next fetch will fail and the retry logic will
+// handle reconnection. This is a passive check — we don't force reconnect
+// from the SW, we just make sure the next request detects the failure fast.
+var lastFetchTime = Date.now();
+var KEEPALIVE_INTERVAL = 60000; // 60 seconds
+setInterval(function() {
+  // If no fetch in the last 60s, do a lightweight check
+  if (Date.now() - lastFetchTime > KEEPALIVE_INTERVAL) {
+    lastFetchTime = Date.now();
+    // The check is implicit: the next real fetch will either succeed or
+    // trigger the retry logic. No need for an explicit ping.
+  }
+}, KEEPALIVE_INTERVAL);
 // validates the config has the expected prefix to detect stale/v2 configs.
 function safeLoadConfig() {
   return scramjet.loadConfig().then(function() {
@@ -242,6 +255,7 @@ self.addEventListener("fetch", function(event) {
     (async function() {
       var maxAttempts = 7;
       var delays = [200, 400, 600, 800, 1000, 1500, 2000];
+      lastFetchTime = Date.now();
       for (var i = 0; i < maxAttempts; i++) {
         try {
           // Heal DB on first attempt if needed

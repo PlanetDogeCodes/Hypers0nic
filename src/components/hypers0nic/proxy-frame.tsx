@@ -66,49 +66,59 @@ export function ProxyFrame() {
     const setupFrameListeners = () => {
       if (!frame || cancelled) return;
 
-    const onUrlChange = (e: any) => {
-      const url = typeof e.url === "string" ? e.url : e.url?.href ?? "";
-      if (url) {
-        setOmnibox(url);
-      }
-    };
-    const onNavigate = (e: any) => {
-      // Don't flip to "loading" on every internal navigate event — Scramjet
-      // fires these for sub-resource and redirect loads, which would pin the
-      // overlay open. The iframe "load" event is the authoritative "done"
-      // signal; we only show loading when the user explicitly navigates.
-      const url = typeof e.url === "string" ? e.url : e.url?.href ?? "";
-      if (url) setOmnibox(url);
-    };
+      const onUrlChange = function(e: any) {
+        const url = typeof e.url === "string" ? e.url : (e.url && e.url.href) || "";
+        if (url) { setOmnibox(url); }
+      };
+      const onNavigate = function(e: any) {
+        const url = typeof e.url === "string" ? e.url : (e.url && e.url.href) || "";
+        if (url) { setOmnibox(url); }
+      };
 
       frame.addEventListener("urlchange", onUrlChange);
       frame.addEventListener("navigate", onNavigate);
+
+      // Store references for proper cleanup
+      frame._onUrlChange = onUrlChange;
+      frame._onNavigate = onNavigate;
     };
 
     tryCreateFrame(0);
 
-    return () => {
+    return function() {
       cancelled = true;
-      frame?.removeEventListener("urlchange", (e: any) => {});
-      frame?.removeEventListener("navigate", (e: any) => {});
+      if (frame) {
+        try {
+          if (frame._onUrlChange) frame.removeEventListener("urlchange", frame._onUrlChange);
+          if (frame._onNavigate) frame.removeEventListener("navigate", frame._onNavigate);
+        } catch(e) {}
+      }
     };
   }, [ready, setOmnibox]);
 
-  // Drive navigation when the omnibox target changes. We flip to "loading"
-  // here (deferred so it doesn't run synchronously inside the effect) and rely
-  // on the iframe "load" event to flip back to "loaded".
+  // Drive navigation when the omnibox target changes. Debounced to prevent
+  // rapid double-navigations from breaking the frame (e.g. user pressing
+  // Enter twice, or the omnibox updating from both user input and urlchange).
+  const navTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (!ready || !frameRef.current || !omniboxValue) return;
-    queueMicrotask(() => setStatus("loading"));
-    try {
-      frameRef.current.go(omniboxValue);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      queueMicrotask(() => {
-        setError(message);
-        setStatus("error");
-      });
-    }
+    // Debounce: if a new navigation comes in within 150ms, cancel the previous
+    if (navTimerRef.current) clearTimeout(navTimerRef.current);
+    navTimerRef.current = setTimeout(() => {
+      queueMicrotask(() => setStatus("loading"));
+      try {
+        frameRef.current.go(omniboxValue);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        queueMicrotask(() => {
+          setError(message);
+          setStatus("error");
+        });
+      }
+    }, 150);
+    return () => {
+      if (navTimerRef.current) clearTimeout(navTimerRef.current);
+    };
   }, [omniboxValue, ready]);
 
   // Listen for back/forward/reload commands dispatched by the store.

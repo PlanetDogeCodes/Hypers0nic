@@ -11,6 +11,7 @@ import { CommandPalette } from "./command-palette";
 import { AppsPanel } from "./apps-panel";
 import { Tinf0ilAuth } from "./tinf0il-auth";
 import { CookieManager } from "./cookie-manager";
+import { ProxyErrorBoundary } from "./proxy-error-boundary";
 import { useHypers0nic } from "@/store/hypers0nic";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { usePanicKey } from "@/hooks/use-panic-key";
@@ -82,7 +83,9 @@ export function AppShell() {
           {view === "home" ? (
             <HomeView onOpenHistory={() => setHistoryOpen(true)} />
           ) : (
-            <ProxyFrame />
+            <ProxyErrorBoundary>
+              <ProxyFrame />
+            </ProxyErrorBoundary>
           )}
         </main>
         {view === "home" && <Footer />}
