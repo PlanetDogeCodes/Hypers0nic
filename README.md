@@ -1,6 +1,6 @@
 # Hypers0nic
 
-A Scramjet-based web proxy client with a terminal-inspired UI, built on Next.js 16.
+A blazing-fast Scramjet proxy client built for unrestricted browsing on the modern web.
 
 ## What it does
 
