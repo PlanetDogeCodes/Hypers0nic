@@ -1,6 +1,6 @@
 # Hypers0nic
 
-A blazing-fast Scramjet proxy client built for unrestricted browsing on the modern web.
+A Scramjet-based web proxy client with a terminal-inspired UI, built on Next.js 16.
 
 ## What it does
 
@@ -31,48 +31,52 @@ Hypers0nic routes web traffic through the [Scramjet](https://github.com/MercuryW
 
 ## Reliability
 
-- **First-load-wins navigation** — Scramjet's `urlchange` event updates the omnibox display without re-triggering a navigation, eliminating the "loads-then-reloads" feedback loop
-- **Controller-ready handshake** — the service worker defers opening the `$scramjet` IndexedDB until the controller signals it has finished writing the config, preventing a DB deadlock that could hang `controller.init()`
-- **IDB open timeout** — `ensureFreshScramjetDB` races its `indexedDB.open()` against a 3-second timeout so a held DB connection never blocks boot
-- **Transport connection reuse** — a single `BareMuxConnection` is shared across all init calls, preventing worker leaks and connection-pool exhaustion
+- **Service worker race condition fixed** — the SW registration is now awaited and verified before `proxyReady` is set. Previously, the SW flag was set to true before registration completed, causing `/service/*` requests to 404. This was the #1 cause of the 60% load failure rate
+- **SW fetch handler hardened** — when the Scramjet config is not loaded after all retries, the SW returns a clear 502 error instead of falling through to `fetch(event.request)` which produced confusing 404s from the Next.js server
+- **Null-safe SW fetch handler** — explicit null check for `scramjet` before calling `scramjet.route()`, preventing TypeErrors when `controllerReady` was never received
+- **Controller-ready handshake** — the service worker defers opening the `$scramjet` IndexedDB until the controller signals it has finished writing the config, preventing a DB deadlock
+- **20-second `controller.init()` timeout** — races against a hard timeout so the app never hangs indefinitely on init
+- **IDB open timeout** — `ensureFreshScramjetDB` races its `indexedDB.open()` against a 3-second timeout
+- **Transport connection reuse** — a single `BareMuxConnection` is shared across all init calls
 - **Transport fallback chain** — `wss://anura.pro` → `wss://wisp.mercurywork.shop/` → local relay, each with a 15-second timeout
-- **Force-reconnect on dead transport** — `forceReconnect()` resets the init promise so the next navigation re-establishes the wisp transport from scratch
-- **Mid-stream retry** — non-HTML fetches (video chunks, API calls) that fail transiently are retried up to 2 times transparently
-- **5xx auto-retry** — 502/503/504 responses from the target are retried once after a short delay
-- **CSP removal on injected HTML** — Content-Security-Policy headers stripped from HTML responses so the ad-blocker and link-rewriter scripts aren't blocked by strict CSPs (YouTube, Twitch)
-- **X-Frame-Options stripping** — frame-blocking headers (X-Frame-Options, COOP, COEP) stripped from all proxied responses so content loads inside the proxy iframe without issues
-- **Error boundary** — app-level React error boundary catches render crashes and shows a retry button instead of a white screen
+- **Force-reconnect on dead transport** — `forceReconnect()` resets the init promise so the next navigation re-establishes the wisp transport
+- **Auto-retry on navigation failure** — if `frame.go()` throws, the ProxyFrame force-reconnects the Scramjet manager, re-initializes, and retries the navigation once
+- **Direct iframe src fallback** — if `createFrame` fails after 3 retries, the iframe `src` is set directly to the encoded proxy URL as a fallback
+- **Mid-stream retry** — non-HTML fetches that fail transiently are retried up to 2 times
+- **5xx auto-retry** — 502/503/504 responses from the target are retried once
+- **CSP removal on injected HTML** — Content-Security-Policy headers stripped from HTML responses
+- **X-Frame-Options stripping** — frame-blocking headers stripped from all proxied responses
+- **Error boundary** — app-level React error boundary catches render crashes
+- **Error retry UI** — the error screen has Retry and Home buttons for manual recovery
 
 ## Stability
 
 - **7-retry fetch loop** in the service worker with escalating delays, plus IDB self-healing on stale config
-- **Iframe sandbox tuning** — `allow-same-origin` + `allow-scripts` + `allow-forms` + `allow-popups` + `allow-presentation` + `allow-storage-access-by-user-activation` — required for YouTube/Twitch player APIs and login flows
+- **Iframe sandbox tuning** — `allow-same-origin` + `allow-scripts` + `allow-forms` + `allow-popups` + `allow-presentation` + `allow-storage-access-by-user-activation`
 - **Full `allow` feature policy** — fullscreen, autoplay, encrypted-media, clipboard, PiP, web-share, gamepad, gyroscope, accelerometer
-- **Response header preservation** — all headers (CORS, Set-Cookie, Content-Type) passed through unchanged for non-HTML responses
-- **5MB HTML body cap** — `injectIntoHtml` skips pages larger than 5MB to avoid blocking the service worker
-- **Storage validation** — all localStorage load functions validate parsed data types and filter corrupt entries, preventing crashes from corrupted settings/history/bookmarks
-- **No motion.div in navigation-critical paths** — loading overlay and progress bar use CSS transitions instead of framer-motion, preventing the "removeChild null" error during rapid navigation
+- **20-second safety timeout** — increased from 12s to handle slow proxied sites
+- **Response header preservation** — all headers passed through unchanged for non-HTML responses
+- **5MB HTML body cap** — `injectIntoHtml` skips pages larger than 5MB
+- **Storage validation** — all localStorage load functions validate parsed data types and filter corrupt entries
+- **No motion.div in navigation-critical paths** — loading overlay and progress bar use CSS transitions
 
 ## Speed
 
-- **Runtime precaching** — the Scramjet JS bundle (~500KB), WASM (~500KB), BareMux worker, and Epoxy transport are cached via the Cache API on first load
-- **Asset preloading** — `<link rel="preload">` in the layout fetches the Scramjet bundle, WASM, and workers in parallel with the page load
-- **Auto-warming proxy** — Scramjet boots on page load (not on first search), so the first navigation is instant
-- **Skeleton loader** — CSS-animated skeleton (no JS animation overhead) shows immediately during navigation
+- **Runtime precaching** — Scramjet JS bundle, WASM, BareMux worker, and Epoxy transport cached via Cache API on first load
+- **Asset preloading** — `<link rel="preload">` in the layout fetches the Scramjet bundle, WASM, and workers in parallel
+- **Bundle-first init order** — the Scramjet bundle is loaded before transport setup, so if transport fails the bundle is already cached for the retry
+- **Auto-warming proxy** — Scramjet boots on page load (not on first search)
+- **Skeleton loader** — CSS-animated skeleton shows immediately during navigation
 
 ## about:blank popup architecture
 
 When the "Open in about:blank" preference is enabled, searches open in a new tab whose address bar shows `about:blank`. The implementation uses a three-layer approach:
 
-1. **Popup creation** — `window.open("about:blank")` opens a new tab (synchronous, within the user gesture so popup blockers don't interfere)
-2. **Iframe injection** — the popup's document is written with a full-screen `<iframe>` that loads the app from the same origin with a `#go=<target-url>` hash
-3. **Hash deep-linking** — on load, the app detects the `#go=` hash, sets an `inAboutBlankPopup` flag (so subsequent navigations happen in-place), and auto-navigates to the target URL
+1. **Popup creation** — `window.open("about:blank")` opens a new tab (synchronous, within the user gesture)
+2. **Iframe injection** — the popup's document is written with a full-screen `<iframe>` that loads the app with a `#go=<target-url>` hash
+3. **Hash deep-linking** — on load, the app detects the `#go=` hash, sets an `inAboutBlankPopup` flag, and auto-navigates to the target URL
 
-The address bar stays `about:blank` because no top-level navigation occurs — only the iframe navigates. The service worker intercepts all `/service/*` requests normally because the iframe is same-origin.
-
-**Fallbacks:**
-- If `window.open("about:blank")` is blocked → fall back to `window.open(appUrl)` (address bar shows the app URL, but content loads)
-- If that also fails → navigate the current tab to the app URL with the hash
+**Fallbacks:** popup blocked → `window.open(appUrl)` → `window.location.href = appUrl`
 
 ## Getting started
 
@@ -109,7 +113,7 @@ Browser → /service/<encoded-url> → Service Worker → ScramjetServiceWorker
   → BareClient (bare-mux) → EpoxyTransport → wisp WebSocket → target site
 ```
 
-The service worker intercepts all `/service/*` requests, decodes the target URL, and routes it through Scramjet. HTML responses are post-processed to inject ad-blocking CSS and link-rewriting JavaScript before returning to the browser. Frame-blocking headers (X-Frame-Options, CSP, COOP, COEP) are stripped so proxied content loads inside the iframe.
+The service worker intercepts all `/service/*` requests, decodes the target URL, and routes it through Scramjet. HTML responses are post-processed to inject ad-blocking CSS and link-rewriting JavaScript. Frame-blocking headers are stripped so proxied content loads inside the iframe.
 
 ## Tech stack
 

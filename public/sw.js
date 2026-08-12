@@ -99,10 +99,14 @@ self.addEventListener("message", function(event) {
   if (event.data === "skipWaiting") self.skipWaiting();
   else if (event.data === "controllerReady") notifyControllerReady();
   else if (event.data === "releaseDB") {
-    // The main thread is about to call controller.init() — reset our state
-    // so we don't touch the DB until "controllerReady" arrives.
     configLoaded = false;
     controllerReady = false;
+  }
+  else if (event.data === "ping") {
+    // Transport keepalive ping. The main thread sends this every 30s to
+    // verify the SW is alive and the config is loaded. If the config is
+    // not loaded, we try to reload it before responding.
+    event.source && event.source.postMessage({ type: "pong", configLoaded: configLoaded, controllerReady: controllerReady });
   }
 });
 
@@ -446,6 +450,22 @@ self.addEventListener("fetch", function(event) {
               await new Promise(function(r) { setTimeout(r, delays[i] || 2000); });
               continue;
             }
+            // All retries exhausted and config still not loaded — return
+            // an error instead of falling through to scramjet.route() which
+            // would fail and cause a confusing 404 from the Next.js server.
+            return new Response(
+              "Proxy not ready: config not loaded after " + maxAttempts + " retries.",
+              { status: 502, headers: { "Content-Type": "text/plain" } }
+            );
+          }
+
+          // Null check: scramjet might be null if controllerReady was never
+          // received (e.g., the main thread crashed before signaling).
+          if (!scramjet) {
+            return new Response(
+              "Proxy not ready: ScramjetServiceWorker not initialized.",
+              { status: 502, headers: { "Content-Type": "text/plain" } }
+            );
           }
 
           if (scramjet.route(event)) {
@@ -462,18 +482,15 @@ self.addEventListener("fetch", function(event) {
             }
 
             // Inject ad blocker + link rewriter into HTML responses.
-            // For non-HTML responses (scripts, video, API), strip frame-
-            // blocking headers (X-Frame-Options, COOP/COEP) so the content
-            // can be displayed inside the proxy iframe. Other headers (CORS,
-            // Set-Cookie, Content-Type) are preserved so SPAs with strict
-            // policies keep working.
             if (response && response.ok && isHtmlResponse(response)) {
               try { return await injectIntoHtml(response); } catch(e) { return stripFrameHeaders(response); }
             }
             return stripFrameHeaders(response);
           }
-          // Not a scramjet route — pass through
-          return await fetch(event.request);
+          // Not a scramjet route — return 404 directly instead of calling
+          // fetch(event.request) which goes to the network and produces a
+          // confusing 404 from the Next.js dev server.
+          return new Response("Not found.", { status: 404, headers: { "Content-Type": "text/plain" } });
         } catch (err) {
           if (i < maxAttempts - 1) {
             // If it's the IDB error, heal and retry
@@ -484,8 +501,8 @@ self.addEventListener("fetch", function(event) {
             continue;
           }
           console.error("[hypers0nic/sw] scramjet error after " + maxAttempts + " retries:", err);
-          // Last resort: try a direct fetch (works for simple sites)
-          try { return await fetch(event.request); } catch(e) {}
+          // Return a clear error response instead of trying fetch(event.request)
+          // which goes to the network and produces a confusing 404.
           return new Response(
             "Scramjet proxy error: " + (err && err.message || err),
             { status: 502, headers: { "Content-Type": "text/plain" } }

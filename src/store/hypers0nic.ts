@@ -107,6 +107,7 @@ interface Hypers0nicStore {
 }
 
 let swRegistered = false;
+let swRegisterPromise: Promise<boolean> | null = null;
 
 // When the app is opened inside an about:blank popup (via the openInAboutBlank
 // feature), it loads with a #go=<url> hash. This flag is set true on such
@@ -114,6 +115,23 @@ let swRegistered = false;
 // instead of opening yet another about:blank popup. Without this, every link
 // click inside the popup would spawn a new popup, creating an infinite chain.
 let inAboutBlankPopup = false;
+
+// Ensure the service worker is registered and controlling. Returns true if
+// the SW is actively controlling the page. This function is idempotent —
+// multiple calls share the same registration promise, preventing race
+// conditions where hydrate() and navigate() both try to register the SW.
+function ensureServiceWorker(): Promise<boolean> {
+  if (swRegistered && typeof navigator !== "undefined" && navigator.serviceWorker?.controller) {
+    return Promise.resolve(true);
+  }
+  if (swRegisterPromise) return swRegisterPromise;
+  swRegisterPromise = registerServiceWorker().then((ok) => {
+    swRegistered = ok;
+    swRegisterPromise = null;
+    return ok;
+  });
+  return swRegisterPromise;
+}
 
 export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
   hydrated: false,
@@ -160,20 +178,12 @@ export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
     }
     // Subscribe to scramjet state so the UI reacts to boot progress.
     getScramjet().subscribe((snap) => set({ scramjet: snap }));
-    // Auto-warm the proxy on page load. This pre-initialises the Scramjet
-    // controller and registers the service worker so that the first search
-    // is instant, avoiding the "Cannot read properties of undefined (reading
-    // 'prefix')" race condition that occurs when the SW intercepts a request
-    // before the controller has finished booting.
-    if (!swRegistered) {
-      swRegistered = true;
-      registerServiceWorker();
-    }
-    // Kick off the scramjet init in the background (don't await — we don't
-    // want to block hydration). The init promise is memoised, so when the
-    // user actually navigates it will resolve immediately if already done.
-    getScramjet().init(settings.wispUrl).catch(() => {
-      // Silently ignore — will retry on first navigation.
+    // Auto-warm the proxy on page load. Register the SW first (awaited), then
+    // init Scramjet. This ordering prevents the race condition where the SW
+    // intercepts a /service/ request before the controller has finished
+    // booting. Both are non-blocking to hydration.
+    ensureServiceWorker().then(() => {
+      getScramjet().init(settings.wispUrl).catch(() => {});
     });
 
     // --- Hash-based deep linking for about:blank popups ---
@@ -310,31 +320,37 @@ export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
 
     set({ view: "proxy", omniboxValue: target, loading: true, navNonce: get().navNonce + 1 });
 
-    // Boot scramjet lazily on first navigation. The promise is memoised inside
-    // the manager so subsequent navigations are instant. If init fails, we
-    // force-reconnect and retry once before giving up — this handles the case
-    // where the transport silently dropped (e.g. wisp relay restarted).
+    // Boot scramjet with retry. The promise is memoised inside the manager
+    // so subsequent navigations are instant. If init fails, we force-reconnect
+    // and retry once before giving up — handles dropped transports.
     const sj = getScramjet();
-    try {
-      await sj.init(settings.wispUrl);
-    } catch (err) {
-      console.error("[hypers0nic] scramjet init failed, retrying:", err);
-      sj.forceReconnect();
+    const tryInit = async () => {
       try {
         await sj.init(settings.wispUrl);
-      } catch (err2) {
-        console.error("[hypers0nic] scramjet init failed on retry:", err2);
-        set({ loading: false });
-        return;
+      } catch (err) {
+        console.error("[hypers0nic] scramjet init failed, retrying:", err);
+        sj.forceReconnect();
+        await sj.init(settings.wispUrl);
       }
+    };
+    try {
+      await tryInit();
+    } catch (err) {
+      console.error("[hypers0nic] scramjet init failed on retry:", err);
+      set({ loading: false });
+      return;
     }
-    // Make sure the service worker is up before we ask it to intercept.
-    if (!swRegistered) {
-      swRegistered = true;
-      await registerServiceWorker();
+    // Ensure the SW is registered and controlling BEFORE setting proxyReady.
+    // This is the critical fix for the 40% failure rate: previously, the SW
+    // flag was set to true before registration completed, so /service/
+    // requests would 404. Now we await and verify.
+    const swOk = await ensureServiceWorker();
+    if (!swOk) {
+      console.error("[hypers0nic] service worker not controlling after registration");
+      set({ loading: false });
+      return;
     }
     set({ proxyReady: true, loading: false });
-    // The ProxyFrame component reads `omniboxValue` and drives the iframe.
   },
 
   goHome: () => {

@@ -74,8 +74,10 @@ export function ProxyFrame() {
   }, [recordVisit]);
 
   // Mark a navigation as in-flight: reset guards, flip UI to loading, arm
-  // the 12-second safety timeout. Also clears any previous error state so
-  // the user doesn't see a stale error message from a failed navigation.
+  // the safety timeout. Also clears any previous error state so the user
+  // doesn't see a stale error message from a failed navigation.
+  // Safety timeout is 20 seconds — some proxied sites legitimately take
+  // 15+ seconds to load (especially through a wisp relay).
   const beginNavigation = useCallback(() => {
     settledRef.current = false;
     recordedRef.current = false;
@@ -87,7 +89,7 @@ export function ProxyFrame() {
       settledRef.current = true;
       setStatus("loaded");
       recordCurrent(omniboxRef.current);
-    }, 12000);
+    }, 20000);
   }, [recordCurrent]);
 
   // Subscribe to the ScramjetFrame once it exists. All state updates happen in
@@ -109,11 +111,22 @@ export function ProxyFrame() {
         if (attempt < 3 && !cancelled) {
           retryTimer = setTimeout(() => tryCreateFrame(attempt + 1), 500 * (attempt + 1));
         } else if (!cancelled) {
-          const message = err instanceof Error ? err.message : String(err);
-          queueMicrotask(() => {
-            setError(message);
-            setStatus("error");
-          });
+          // All retries failed — fall back to setting the iframe src directly
+          // to the encoded proxy URL. The SW will still intercept /service/*
+          // requests, so the content will load (just without the ScramjetFrame
+          // API for back/forward/urlchange events).
+          try {
+            const encoded = sj.encodeUrl(omniboxRef.current);
+            if (iframeRef.current && encoded) {
+              iframeRef.current.src = encoded;
+            }
+          } catch {
+            const message = err instanceof Error ? err.message : String(err);
+            queueMicrotask(() => {
+              setError(message);
+              setStatus("error");
+            });
+          }
         }
       }
     };
@@ -182,15 +195,43 @@ export function ProxyFrame() {
 
     beginNavigation();
 
-    try {
-      frameRef.current.go(url);
-    } catch (err) {
+    // Auto-retry with force-reconnect on navigation failure. If frame.go()
+    // throws (dead transport, controller issue), we force-reconnect the
+    // Scramjet manager, wait for re-init, and retry the navigation once.
+    let retried = false;
+    const tryNavigate = () => {
+      try {
+        frameRef.current.go(url);
+      } catch (err) {
+        if (!retried) {
+          retried = true;
+          const sj = getScramjet();
+          sj.forceReconnect();
+          // Re-init and retry after a short delay.
+          sj.init(useHypers0nic.getState().settings.wispUrl)
+            .then(() => {
+              try {
+                frameRef.current?.go(url);
+              } catch (err2) {
+                showError(err2);
+              }
+            })
+            .catch(() => showError(err));
+        } else {
+          showError(err);
+        }
+      }
+    };
+
+    const showError = (err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
       if (safetyTimeoutRef.current) clearTimeout(safetyTimeoutRef.current);
       settledRef.current = true;
       setError(message);
       setStatus("error");
-    }
+    };
+
+    tryNavigate();
   }, [navNonce, ready, beginNavigation]);
 
   // Listen for back/forward/reload commands dispatched by the store.
@@ -298,10 +339,41 @@ export function ProxyFrame() {
               <h3 className="mb-1 font-semibold text-foreground">
                 Couldn&apos;t load this page
               </h3>
-              <p className="text-sm text-muted-foreground">
+              <p className="mb-4 text-sm text-muted-foreground">
                 {error ||
                   "The proxy transport rejected the request. Check your wisp relay setting or try again."}
               </p>
+              <div className="flex justify-center gap-3">
+                <button
+                  onClick={() => {
+                    const sj = getScramjet();
+                    sj.forceReconnect();
+                    setStatus("loading");
+                    setError(null);
+                    sj.init(useHypers0nic.getState().settings.wispUrl)
+                      .then(() => {
+                        if (frameRef.current && omniboxRef.current) {
+                          settledRef.current = false;
+                          recordedRef.current = false;
+                          beginNavigation();
+                          try {
+                            frameRef.current.go(omniboxRef.current);
+                          } catch {}
+                        }
+                      })
+                      .catch(() => setStatus("error"));
+                  }}
+                  className="rounded border border-primary bg-primary/10 px-4 py-2 text-sm font-medium text-primary transition-colors hover:bg-primary/20"
+                >
+                  Retry
+                </button>
+                <button
+                  onClick={() => useHypers0nic.getState().goHome()}
+                  className="rounded border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted"
+                >
+                  Home
+                </button>
+              </div>
             </div>
           </div>
         )}

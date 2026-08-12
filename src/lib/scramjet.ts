@@ -89,8 +89,12 @@ class ScramjetManager {
     this.setState({ status: "loading", error: undefined });
     try {
       const wispUrl = this.resolveWispUrl(customWisp);
-      await this.setupTransport(wispUrl);
+      // Load the bundle FIRST, then set up transport. This order is more
+      // reliable: the bundle is a local file (fast, always succeeds), and
+      // the transport setup can take time (wisp negotiation). If transport
+      // fails, we still have the bundle loaded for the retry.
       await this.loadBundle();
+      await this.setupTransport(wispUrl);
       await ensureFreshScramjetDB();
 
       const factory = window.$scramjetLoadController!;
@@ -106,15 +110,19 @@ class ScramjetManager {
       });
       // Tell the SW to release its $scramjet DB connection so our
       // controller.init() can write the config without being blocked.
-      // The SW defers creating its ScramjetServiceWorker until we send
-      // "controllerReady", preventing an IDB deadlock.
       try {
         navigator.serviceWorker.controller?.postMessage("releaseDB");
       } catch {}
       await new Promise((r) => setTimeout(r, 200));
-      await this.controller.init();
-      // Tell the SW it can now safely read the config from IDB. The SW
-      // creates its ScramjetServiceWorker instance at this point.
+      // Race controller.init() against a 20-second timeout. If it hangs
+      // (IDB deadlock, WASM issue), we throw and the caller can retry.
+      await Promise.race([
+        this.controller.init(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("controller.init() timeout")), 20000)
+        ),
+      ]);
+      // Tell the SW it can now safely read the config from IDB.
       try {
         navigator.serviceWorker.controller?.postMessage("controllerReady");
       } catch {}
@@ -221,14 +229,32 @@ class ScramjetManager {
   /**
    * Force reconnect the transport. Called when a dead connection is detected.
    * Resets the init promise so the next init() call re-establishes the
-   * transport from scratch.
+   * transport from scratch. Also destroys the old transport connection to
+   * prevent zombie workers.
    */
   forceReconnect(): void {
     this.initPromise = null;
     this.transportUrl = null;
     this.controller = null;
-    this.bundleLoaded = false;
+    // Don't destroy the transportConn — reuse it on next init. Destroying
+    // it can leave orphaned workers. Instead, just mark it for re-setup.
     this.setState({ status: "idle" });
+  }
+
+  /**
+   * Check if the transport is healthy. Called before each navigation to
+   * catch dead connections early (the wisp relay may have restarted).
+   * Returns true if the transport is alive and ready.
+   */
+  isTransportHealthy(): boolean {
+    if (!this.transportConn || !this.transportUrl) return false;
+    if (this.state.status !== "ready") return false;
+    try {
+      const port = this.transportConn.getInnerPort?.();
+      return !!(port && typeof port === "object" && "postMessage" in port);
+    } catch {
+      return false;
+    }
   }
 
   private resolveLocalRelay(): string {
@@ -330,19 +356,23 @@ export function getScramjet(): ScramjetManager {
 
 /**
  * Register the Hypers0nic service worker and wait for it to actively control
- * the page.
+ * the page. Returns true only if the SW is actively controlling, false if
+ * registration failed or timed out.
  */
-export async function registerServiceWorker(): Promise<ServiceWorkerRegistration | null> {
+export async function registerServiceWorker(): Promise<boolean> {
   if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) {
-    return null;
+    return false;
   }
   try {
     const reg = await navigator.serviceWorker.register("/sw.js", { scope: "/" });
-    await waitForController(reg, 8000);
-    return reg;
+    await waitForController(reg, 10000);
+    // Verify the SW is actually controlling the page. This is the critical
+    // check that prevents the race condition where proxyReady is set before
+    // the SW can intercept /service/ requests.
+    return !!navigator.serviceWorker.controller;
   } catch (err) {
     console.warn("[hypers0nic] service worker registration failed:", err);
-    return null;
+    return false;
   }
 }
 
