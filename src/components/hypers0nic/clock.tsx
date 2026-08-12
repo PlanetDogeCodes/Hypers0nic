@@ -19,12 +19,15 @@ function format(date: Date): ClockState {
 
 /** Compact clock for the top bar — 12-hour format with AM/PM. */
 export function Clock({ className }: { className?: string }) {
-  const [state, setState] = useState<ClockState>(() => format(new Date()));
+  const [state, setState] = useState<ClockState | null>(null);
 
   useEffect(() => {
+    setState(format(new Date()));
     const id = setInterval(() => setState(format(new Date())), 1000);
     return () => clearInterval(id);
   }, []);
+
+  if (!state) return <span className={className}>--:--</span>;
 
   return (
     <span className={className}>

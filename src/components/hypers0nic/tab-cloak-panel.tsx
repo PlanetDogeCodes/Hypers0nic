@@ -151,7 +151,7 @@ export function TabCloakPanel() {
 
       <p className="text-[11px] text-muted-foreground">
         Current tab title:{" "}
-        <span className="text-foreground">&ldquo;{document.title}&rdquo;</span>
+        <span className="text-foreground">&ldquo;{typeof document !== "undefined" ? document.title : "Hypers0nic"}&rdquo;</span>
       </p>
     </div>
   );

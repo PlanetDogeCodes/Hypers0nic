@@ -15,6 +15,7 @@ export function ProxyFrame() {
   const proxyReady = useHypers0nic((s) => s.proxyReady);
   const recordVisit = useHypers0nic((s) => s.recordVisit);
   const topBarAlwaysVisible = useHypers0nic((s) => s.settings.preferences.topBarAlwaysVisible);
+  const [mounted, setMounted] = useState(false);
   const setOmnibox = useHypers0nic((s) => s.setOmnibox);
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -22,6 +23,10 @@ export function ProxyFrame() {
   const frameRef = useRef<{ go: (u: string) => void; back: () => void; forward: () => void; reload: () => void; addEventListener: (t: string, fn: (e: any) => void) => void; removeEventListener: (t: string, fn: (e: any) => void) => void } | null>(null);
   const [status, setStatus] = useState<FrameStatus>("loading");
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   // The iframe may only mount once BOTH the Scramjet controller has booted AND
   // the service worker is actively controlling the page. Mounting earlier lets
@@ -154,7 +159,7 @@ export function ProxyFrame() {
   }, [omniboxValue, recordVisit]);
 
   return (
-    <div className={topBarAlwaysVisible ? "flex h-[calc(100vh-3rem)] flex-col" : "flex h-screen flex-col"}>
+    <div className={mounted && topBarAlwaysVisible ? "flex h-[calc(100vh-3rem)] flex-col" : "flex h-screen flex-col"}>
       <ProxyToolbar status={status} />
       <div className="relative flex-1 bg-background">
         {status === "loading" && (

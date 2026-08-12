@@ -36,9 +36,11 @@ export function Header({
   const tabCloak = useHypers0nic((s) => s.settings.tabCloak);
   const toggleStealth = useHypers0nic((s) => s.toggleStealth);
   const topBarAlwaysVisible = useHypers0nic((s) => s.settings.preferences.topBarAlwaysVisible);
-  const [visible, setVisible] = useState(topBarAlwaysVisible);
+  const [mounted, setMounted] = useState(false);
+  const [visible, setVisible] = useState(false);
 
   useEffect(() => {
+    setMounted(true);
     setVisible(topBarAlwaysVisible);
   }, [topBarAlwaysVisible]);
 
@@ -72,7 +74,7 @@ export function Header({
 
   return (
     <>
-      {!topBarAlwaysVisible && (
+      {mounted && !topBarAlwaysVisible && (
         <div className="fixed left-0 right-0 top-0 z-40 h-10" onMouseEnter={() => setVisible(true)} />
       )}
 

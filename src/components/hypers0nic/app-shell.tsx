@@ -22,6 +22,7 @@ export function AppShell() {
   const hydrate = useHypers0nic((s) => s.hydrate);
   const tabCloak = useHypers0nic((s) => s.settings.tabCloak);
   const topBarAlwaysVisible = useHypers0nic((s) => s.settings.preferences.topBarAlwaysVisible);
+  const [mounted, setMounted] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -31,6 +32,7 @@ export function AppShell() {
 
   useEffect(() => {
     hydrate();
+    setMounted(true);
   }, [hydrate]);
 
   useEffect(() => {
@@ -75,7 +77,7 @@ export function AppShell() {
         onOpenCookies={() => setCookiesOpen(true)}
       />
       {/* When the top bar is always visible, push content down by its height (h-12 = 3rem). */}
-      <div className={topBarAlwaysVisible ? "pt-12" : ""}>
+      <div className={mounted && topBarAlwaysVisible ? "pt-12" : ""}>
         <main className="flex min-h-[calc(100vh-3rem)] flex-col">
           {view === "home" ? (
             <HomeView onOpenHistory={() => setHistoryOpen(true)} />
