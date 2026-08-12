@@ -51,6 +51,13 @@ interface Hypers0nicStore {
   omniboxValue: string;
   loading: boolean;
   proxyReady: boolean;
+  // Monotonically increasing counter that bumps ONLY on user-initiated
+  // navigation (navigate()). It is NOT bumped by setOmnibox(), which is
+  // called by Scramjet's urlchange/navigate events to update the omnibox
+  // display. ProxyFrame's navigation effect depends on this nonce instead
+  // of omniboxValue, so the feedback loop (go -> urlchange -> setOmnibox ->
+  // go again) is broken: the first load is kept, no reload happens.
+  navNonce: number;
 
   // --- settings ---
   settings: Hypers0nicSettings;
@@ -107,6 +114,7 @@ export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
   omniboxValue: "",
   loading: false,
   proxyReady: false,
+  navNonce: 0,
   settings: DEFAULT_SETTINGS,
   history: [],
   bookmarks: [],
@@ -195,26 +203,17 @@ export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
       return;
     }
 
-    set({ view: "proxy", omniboxValue: target, loading: true });
+    set({ view: "proxy", omniboxValue: target, loading: true, navNonce: get().navNonce + 1 });
 
     // Boot scramjet lazily on first navigation. The promise is memoised inside
-    // the manager so subsequent navigations are instant. If init fails, we
-    // force-reconnect and retry once before giving up.
+    // the manager so subsequent navigations are instant.
     const sj = getScramjet();
     try {
       await sj.init(settings.wispUrl);
     } catch (err) {
-      console.error("[hypers0nic] scramjet init failed, retrying:", err);
-      // Force reconnect and retry — this handles the case where the transport
-      // silently dropped (e.g., wisp relay restarted).
-      sj.forceReconnect();
-      try {
-        await sj.init(settings.wispUrl);
-      } catch (err2) {
-        console.error("[hypers0nic] scramjet init failed on retry:", err2);
-        set({ loading: false });
-        return;
-      }
+      console.error("[hypers0nic] scramjet init failed:", err);
+      set({ loading: false });
+      return;
     }
     // Make sure the service worker is up before we ask it to intercept.
     if (!swRegistered) {

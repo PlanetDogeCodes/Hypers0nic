@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { getScramjet } from "@/lib/scramjet";
 import { useHypers0nic } from "@/store/hypers0nic";
 import { ProxyToolbar } from "./proxy-toolbar";
@@ -11,33 +11,86 @@ type FrameStatus = "loading" | "loaded" | "error";
 
 export function ProxyFrame() {
   const omniboxValue = useHypers0nic((s) => s.omniboxValue);
+  const navNonce = useHypers0nic((s) => s.navNonce);
   const scramjet = useHypers0nic((s) => s.scramjet);
   const proxyReady = useHypers0nic((s) => s.proxyReady);
   const recordVisit = useHypers0nic((s) => s.recordVisit);
   const topBarAlwaysVisible = useHypers0nic((s) => s.settings.preferences.topBarAlwaysVisible);
-  const [mounted, setMounted] = useState(false);
   const setOmnibox = useHypers0nic((s) => s.setOmnibox);
+  const [mounted, setMounted] = useState(false);
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
-  // ScramjetFrame instance. Kept in a ref because it is not React state.
   const frameRef = useRef<{ go: (u: string) => void; back: () => void; forward: () => void; reload: () => void; addEventListener: (t: string, fn: (e: any) => void) => void; removeEventListener: (t: string, fn: (e: any) => void) => void } | null>(null);
   const [status, setStatus] = useState<FrameStatus>("loading");
   const [error, setError] = useState<string | null>(null);
+
+  // --- refs that decouple navigation from React state ---
+  //
+  // omniboxRef: always holds the latest omniboxValue. Used inside the load
+  //   handler so we don't need omniboxValue in the load effect's dependency
+  //   array (which would reset the "settled" guard on every urlchange).
+  //
+  // settledRef: true once a navigation's load event (or safety timeout) has
+  //   fired. Prevents duplicate recordVisit calls and duplicate status flips.
+  //   Reset to false at the start of every navigation (go/back/forward/reload).
+  //
+  // recordedRef: ensures recordVisit is called exactly once per navigation.
+  //
+  // safetyTimeoutRef: the 12-second fallback timer. Cleared when the load
+  //   event fires. Some sites (streaming/long-poll) delay the load event.
+  const omniboxRef = useRef(omniboxValue);
+  const settledRef = useRef(true);
+  const recordedRef = useRef(true);
+  const safetyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     setMounted(true);
   }, []);
 
+  // Keep omniboxRef in sync with the store. This runs as its own effect so the
+  // nav effect (below) can depend on navNonce alone — urlchange-driven
+  // omniboxValue updates update the ref but do NOT re-trigger frame.go().
+  useEffect(() => {
+    omniboxRef.current = omniboxValue;
+  }, [omniboxValue]);
+
   // The iframe may only mount once BOTH the Scramjet controller has booted AND
-  // the service worker is actively controlling the page. Mounting earlier lets
-  // the first /service/* navigation slip past the SW and load the app shell.
+  // the service worker is actively controlling the page.
   const ready = scramjet.status === "ready" && proxyReady;
+
+  // Record the current navigation in history. Guarded by recordedRef so it
+  // is called exactly once per navigation — either from the iframe load event
+  // (user-initiated) or from the urlchange handler (link-click/redirect whose
+  // load event was skipped by the settled guard).
+  const recordCurrent = useCallback((url: string) => {
+    if (recordedRef.current) return;
+    recordedRef.current = true;
+    try {
+      const frame = frameRef.current as any;
+      const title = frame?.title || iframeRef.current?.contentDocument?.title || "";
+      if (title && url) recordVisit(url, title);
+    } catch {
+      /* cross-origin reads throw — Scramjet handles title via events */
+    }
+  }, [recordVisit]);
+
+  // Mark a navigation as in-flight: reset guards, flip UI to loading, arm
+  // the 12-second safety timeout.
+  const beginNavigation = useCallback(() => {
+    settledRef.current = false;
+    recordedRef.current = false;
+    setStatus("loading");
+    if (safetyTimeoutRef.current) clearTimeout(safetyTimeoutRef.current);
+    safetyTimeoutRef.current = setTimeout(() => {
+      if (settledRef.current) return;
+      settledRef.current = true;
+      setStatus("loaded");
+      recordCurrent(omniboxRef.current);
+    }, 12000);
+  }, [recordCurrent]);
 
   // Subscribe to the ScramjetFrame once it exists. All state updates happen in
   // event callbacks (not the effect body), which keeps renders cascade-free.
-  // If createFrame fails, we retry up to 3 times with a delay before showing
-  // an error — this handles the race where the controller is technically
-  // "ready" but the internal state isn't fully set up.
   useEffect(() => {
     if (!ready || !iframeRef.current) return;
     const sj = getScramjet();
@@ -66,107 +119,132 @@ export function ProxyFrame() {
     const setupFrameListeners = () => {
       if (!frame || cancelled) return;
 
-      const onUrlChange = function(e: any) {
+      // urlchange / navigate events fire when Scramjet itself moves the
+      // iframe (link click, redirect, pushState, back/forward, or our own
+      // frame.go call). We update the omnibox DISPLAY only — we deliberately
+      // do NOT call frame.go() here, because the iframe has already moved.
+      // The navigation effect below depends on navNonce (which only bumps on
+      // user-initiated navigate()), so this setOmnibox call will NOT cause a
+      // reload. This is the fix for "loads quickly, then unloads and reloads".
+      //
+      // Additionally, if the load event already fired (settledRef is true)
+      // but we haven't recorded the visit yet (recordedRef is false), this is
+      // a link-click/redirect whose load event was skipped by the settled
+      // guard. Record it now using the canonical urlchange URL.
+      const onUrlChange = function (e: any) {
         const url = typeof e.url === "string" ? e.url : (e.url && e.url.href) || "";
-        if (url) { setOmnibox(url); }
+        if (url) {
+          setOmnibox(url);
+          if (settledRef.current) recordCurrent(url);
+        }
       };
-      const onNavigate = function(e: any) {
+      const onNavigate = function (e: any) {
         const url = typeof e.url === "string" ? e.url : (e.url && e.url.href) || "";
-        if (url) { setOmnibox(url); }
+        if (url) {
+          setOmnibox(url);
+          if (settledRef.current) recordCurrent(url);
+        }
       };
 
       frame.addEventListener("urlchange", onUrlChange);
       frame.addEventListener("navigate", onNavigate);
 
-      // Store references for proper cleanup
       frame._onUrlChange = onUrlChange;
       frame._onNavigate = onNavigate;
     };
 
     tryCreateFrame(0);
 
-    return function() {
+    return function () {
       cancelled = true;
       if (frame) {
         try {
           if (frame._onUrlChange) frame.removeEventListener("urlchange", frame._onUrlChange);
           if (frame._onNavigate) frame.removeEventListener("navigate", frame._onNavigate);
-        } catch(e) {}
+        } catch (e) {}
       }
     };
-  }, [ready, setOmnibox]);
+  }, [ready, setOmnibox, recordCurrent]);
 
-  // Drive navigation when the omnibox target changes. Debounced to prevent
-  // rapid double-navigations from breaking the frame (e.g. user pressing
-  // Enter twice, or the omnibox updating from both user input and urlchange).
-  const navTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Drive navigation when the USER initiates one (navNonce bumps). We
+  // intentionally do NOT depend on omniboxValue here: Scramjet's urlchange
+  // event updates omniboxValue (via setOmnibox) after every load, and if this
+  // effect depended on omniboxValue it would re-fire frame.go() — causing the
+  // "loads quickly, then unloads and reloads" bug. The URL to navigate to is
+  // read from omniboxRef.current, which is kept in sync by the effect above.
   useEffect(() => {
-    if (!ready || !frameRef.current || !omniboxValue) return;
-    // Debounce: if a new navigation comes in within 150ms, cancel the previous
-    if (navTimerRef.current) clearTimeout(navTimerRef.current);
-    navTimerRef.current = setTimeout(() => {
-      queueMicrotask(() => setStatus("loading"));
-      try {
-        frameRef.current.go(omniboxValue);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        queueMicrotask(() => {
-          setError(message);
-          setStatus("error");
-        });
-      }
-    }, 150);
-    return () => {
-      if (navTimerRef.current) clearTimeout(navTimerRef.current);
-    };
-  }, [omniboxValue, ready]);
+    if (!ready || !frameRef.current) return;
+    const url = omniboxRef.current;
+    if (!url) return;
+
+    beginNavigation();
+
+    try {
+      frameRef.current.go(url);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (safetyTimeoutRef.current) clearTimeout(safetyTimeoutRef.current);
+      settledRef.current = true;
+      setError(message);
+      setStatus("error");
+    }
+  }, [navNonce, ready, beginNavigation]);
 
   // Listen for back/forward/reload commands dispatched by the store.
+  // These reset the settled guard so the subsequent load event is not skipped.
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail as { action: string };
       const frame = frameRef.current;
       if (!frame) return;
       try {
-        if (detail.action === "back") frame.back();
-        else if (detail.action === "forward") frame.forward();
-        else if (detail.action === "reload") frame.reload();
+        if (detail.action === "back") {
+          beginNavigation();
+          frame.back();
+        } else if (detail.action === "forward") {
+          beginNavigation();
+          frame.forward();
+        } else if (detail.action === "reload") {
+          beginNavigation();
+          frame.reload();
+        }
       } catch (err) {
         console.error("[hypers0nic] navigation action failed:", err);
       }
     };
     window.addEventListener("hypers0nic:navigate", handler);
     return () => window.removeEventListener("hypers0nic:navigate", handler);
-  }, []);
+  }, [beginNavigation]);
 
-  // Detect load completion via the iframe's load event. Scramjet rewrites the
-  // page in-place so a load event fires once the proxied document is ready.
-  // A safety timeout clears the overlay if the load event is delayed (some
-  // sites hold the connection open for streaming/long-poll resources).
+  // Single load listener, set up once when the iframe mounts. It does NOT
+  // depend on omniboxValue, so urlchange-driven omnibox updates don't tear
+  // down and re-create the listener. The URL for recordVisit is read from
+  // omniboxRef.current.
   useEffect(() => {
     const iframe = iframeRef.current;
     if (!iframe) return;
-    let settled = false;
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      setStatus("loaded");
-      try {
-        const frame = frameRef.current as any;
-        const title = frame?.title || iframe.contentDocument?.title || "";
-        if (title && omniboxValue) recordVisit(omniboxValue, title);
-      } catch {
-        /* cross-origin reads throw — Scramjet handles title via events */
+    const onLoad = () => {
+      if (settledRef.current) return;
+      settledRef.current = true;
+      if (safetyTimeoutRef.current) {
+        clearTimeout(safetyTimeoutRef.current);
+        safetyTimeoutRef.current = null;
       }
+      setStatus("loaded");
+      recordCurrent(omniboxRef.current);
     };
-    const onLoad = () => finish();
     iframe.addEventListener("load", onLoad);
-    const safety = setTimeout(finish, 12000);
     return () => {
       iframe.removeEventListener("load", onLoad);
-      clearTimeout(safety);
     };
-  }, [omniboxValue, recordVisit]);
+  }, [recordVisit, recordCurrent]);
+
+  // Clear the safety timeout on unmount.
+  useEffect(() => {
+    return () => {
+      if (safetyTimeoutRef.current) clearTimeout(safetyTimeoutRef.current);
+    };
+  }, []);
 
   return (
     <div className={mounted && topBarAlwaysVisible ? "flex h-[calc(100vh-3rem)] flex-col" : "flex h-screen flex-col"}>
@@ -179,9 +257,7 @@ export function ProxyFrame() {
             exit={{ opacity: 0 }}
             className="absolute inset-0 z-10 overflow-hidden bg-background"
           >
-            {/* Skeleton loader — staggered entrance mimics a real page layout */}
             <div className="mx-auto max-w-4xl space-y-4 p-6">
-              {/* Top bar skeleton */}
               <motion.div
                 initial={{ opacity: 0, y: -8 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -192,7 +268,6 @@ export function ProxyFrame() {
                 <div className="skeleton-block h-6 flex-1 rounded-md" />
                 <div className="skeleton-block h-8 w-20 rounded-md" />
               </motion.div>
-              {/* Hero block */}
               <motion.div
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -203,7 +278,6 @@ export function ProxyFrame() {
                 <div className="skeleton-block h-4 w-full rounded-md" />
                 <div className="skeleton-block h-4 w-5/6 rounded-md" />
               </motion.div>
-              {/* Card grid */}
               <motion.div
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -214,7 +288,6 @@ export function ProxyFrame() {
                 <div className="skeleton-block h-32 rounded-xl" />
                 <div className="skeleton-block hidden h-32 rounded-xl sm:block" />
               </motion.div>
-              {/* Text lines */}
               <motion.div
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -226,7 +299,6 @@ export function ProxyFrame() {
                 <div className="skeleton-block h-4 w-3/4 rounded-md" />
               </motion.div>
             </div>
-            {/* Floating status pill */}
             <motion.div
               initial={{ opacity: 0, y: 12 }}
               animate={{ opacity: 1, y: 0 }}

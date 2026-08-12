@@ -38,11 +38,9 @@ export function ProxyToolbar({
   const bookmarks = useHypers0nic((s) => s.bookmarks);
   const toggleBookmark = useHypers0nic((s) => s.toggleBookmark);
   const topBarAlwaysVisible = useHypers0nic((s) => s.settings.preferences.topBarAlwaysVisible);
-  const [mounted, setMounted] = useState(false);
-  const [visible, setVisible] = useState(false);
+  const [visible, setVisible] = useState(topBarAlwaysVisible);
 
   useEffect(() => {
-    setMounted(true);
     setVisible(topBarAlwaysVisible);
   }, [topBarAlwaysVisible]);
 
@@ -81,7 +79,7 @@ export function ProxyToolbar({
   return (
     <>
       {/* Invisible hover zone — only needed when auto-hidden */}
-      {mounted && !topBarAlwaysVisible && (
+      {!topBarAlwaysVisible && (
         <div className="fixed left-0 right-0 top-0 z-40 h-10" onMouseEnter={() => setVisible(true)} />
       )}
 

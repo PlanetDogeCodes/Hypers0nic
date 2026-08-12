@@ -29,6 +29,15 @@ Hypers0nic routes web traffic through the [Scramjet](https://github.com/MercuryW
 - **Top bar** — always visible by default, or auto-hide on mouse leave (configurable)
 - **Keyboard shortcuts** throughout — Ctrl+K, Ctrl+H, Ctrl+,, Ctrl+`, Esc, Alt+arrows
 
+## Reliability
+
+- **First-load-wins navigation** — Scramjet's `urlchange` event updates the omnibox display without re-triggering a navigation, eliminating the "loads-then-reloads" feedback loop
+- **Controller-ready handshake** — the service worker defers opening the `$scramjet` IndexedDB until the controller signals it has finished writing the config, preventing a DB deadlock that could hang `controller.init()`
+- **IDB open timeout** — `ensureFreshScramjetDB` races its `indexedDB.open()` against a 3-second timeout so a held DB connection never blocks boot
+- **Transport fallback chain** — `wss://anura.pro` → `wss://wisp.mercurywork.shop/` → local relay, each with a 15-second timeout
+- **7-retry fetch loop** in the service worker with escalating delays, plus IDB self-healing on stale config
+- **Force-reconnect on dead transport** — `forceReconnect()` resets the init promise so the next navigation re-establishes the wisp transport from scratch
+
 ## Getting started
 
 ```sh

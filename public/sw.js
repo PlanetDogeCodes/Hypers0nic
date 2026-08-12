@@ -9,15 +9,56 @@
  */
 importScripts("/scramjet/scramjet.all.js");
 
-var { ScramjetServiceWorker } = self.$scramjetLoadWorker();
-var scramjet = new ScramjetServiceWorker();
 var PROXY_PREFIX = "/service/";
 var configLoaded = false;
+// Deferred — the ScramjetServiceWorker is not created until the main thread
+// signals "controllerReady". This prevents the SW's constructor (which may
+// call loadConfig and open the $scramjet IDB) from blocking the controller's
+// init() write — a deadlock that hangs controller.init() forever.
+var scramjet = null;
+var { ScramjetServiceWorker } = self.$scramjetLoadWorker();
 
 self.addEventListener("install", function() { self.skipWaiting(); });
 self.addEventListener("activate", function(event) { event.waitUntil(self.clients.claim()); });
+
+// --- Controller-ready handshake ---
+// The main thread's ScramjetController.init() writes the config to the
+// $scramjet IndexedDB. If the SW opens the same DB (via loadConfig) before
+// the controller has finished writing, the SW's connection blocks the
+// controller's write — causing controller.init() to hang forever.
+//
+// To prevent this deadlock, the SW does NOT create its ScramjetServiceWorker
+// or call loadConfig() until the main thread signals "controllerReady".
+// If a /service/ request arrives before the controller is ready, the SW
+// waits (up to 15s) for the signal.
+var controllerReady = false;
+var controllerReadyWaiters = [];
+function notifyControllerReady() {
+  controllerReady = true;
+  if (!scramjet) {
+    scramjet = new ScramjetServiceWorker();
+  }
+  var waiters = controllerReadyWaiters;
+  controllerReadyWaiters = [];
+  waiters.forEach(function(resolve) { resolve(); });
+}
+function waitForControllerReady(timeoutMs) {
+  if (controllerReady) return Promise.resolve();
+  return new Promise(function(resolve) {
+    controllerReadyWaiters.push(resolve);
+    setTimeout(resolve, timeoutMs || 15000);
+  });
+}
+
 self.addEventListener("message", function(event) {
   if (event.data === "skipWaiting") self.skipWaiting();
+  else if (event.data === "controllerReady") notifyControllerReady();
+  else if (event.data === "releaseDB") {
+    // The main thread is about to call controller.init() — reset our state
+    // so we don't touch the DB until "controllerReady" arrives.
+    configLoaded = false;
+    controllerReady = false;
+  }
 });
 
 // --- Ad/tracker blocker ---
@@ -192,39 +233,9 @@ function healScramjetDB() {
   });
 }
 
-// Keepalive: periodically ping the BareMux worker to detect dead connections.
-// If the transport drops, the next fetch will fail and the retry logic will
-// handle reconnection. This is a passive check — we don't force reconnect
-// from the SW, we just make sure the next request detects the failure fast.
-var lastFetchTime = Date.now();
-var KEEPALIVE_INTERVAL = 60000; // 60 seconds
-setInterval(function() {
-  // If no fetch in the last 60s, do a lightweight check
-  if (Date.now() - lastFetchTime > KEEPALIVE_INTERVAL) {
-    lastFetchTime = Date.now();
-    // The check is implicit: the next real fetch will either succeed or
-    // trigger the retry logic. No need for an explicit ping.
-  }
-}, KEEPALIVE_INTERVAL);
-// validates the config has the expected prefix to detect stale/v2 configs.
+// Safe loadConfig wrapper — heals the DB if the transaction fails
 function safeLoadConfig() {
   return scramjet.loadConfig().then(function() {
-    // Validate the config is compatible — check that it has the expected
-    // prefix. If a v2 config was written to the DB (which uses a different
-    // format), the prefix check will fail and we'll heal the DB.
-    if (scramjet.config && scramjet.config.prefix !== PROXY_PREFIX) {
-      console.warn("[hypers0nic/sw] Stale config detected (prefix mismatch), healing DB");
-      configLoaded = false;
-      return healScramjetDB().then(function() {
-        return new Promise(function(resolve) { setTimeout(resolve, 500); });
-      }).then(function() {
-        return scramjet.loadConfig().then(function() {
-          configLoaded = true;
-        }).catch(function() {
-          configLoaded = false;
-        });
-      });
-    }
     configLoaded = true;
   }).catch(function(err) {
     // If it's the "object store not found" error, try healing the DB
@@ -255,7 +266,12 @@ self.addEventListener("fetch", function(event) {
     (async function() {
       var maxAttempts = 7;
       var delays = [200, 400, 600, 800, 1000, 1500, 2000];
-      lastFetchTime = Date.now();
+
+      // Wait for the main thread's controller to finish init before touching
+      // the $scramjet IDB. This prevents the deadlock where the SW's DB
+      // connection blocks the controller's config write.
+      await waitForControllerReady(15000);
+
       for (var i = 0; i < maxAttempts; i++) {
         try {
           // Heal DB on first attempt if needed

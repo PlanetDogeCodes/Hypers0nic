@@ -88,7 +88,9 @@ export function ProxyHUD() {
 }
 
 function useScramblingIp(active: boolean): string {
-  const [ip, setIp] = useState("•••.•••.•••.•••");
+  const [ip, setIp] = useState(() =>
+    active ? randomOctets() : "•••.•••.•••.•••"
+  );
 
   const tickRef = useRef<() => void>(() => {});
   useEffect(() => {
