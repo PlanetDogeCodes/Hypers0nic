@@ -69,7 +69,7 @@ export function HomeView({ onOpenHistory }: { onOpenHistory?: () => void }) {
           transition={{ duration: 0.4 }}
           className="flex w-full flex-col items-center"
         >
-          <div className="mb-5 flex items-center gap-3">
+          <div className="mb-5 flex flex-col items-center gap-3">
             <Logo size={48} />
             <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
               <span className="text-foreground">Hyper</span>

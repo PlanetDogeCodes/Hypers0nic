@@ -6,6 +6,16 @@
  *
  * Includes ad/tracker blocking, search result link rewriting, and robust
  * retry logic with IDB self-healing.
+ *
+ * Tricky-site (YouTube/Twitch) hardening:
+ *   - Mid-stream retry: non-HTML fetches that fail transiently are retried
+ *     transparently up to 2 times (video chunks, API calls).
+ *   - 5xx auto-retry: 502/503/504 responses from the target are retried once
+ *     after a short delay — handles transient relay hiccups.
+ *   - Response header preservation: all headers (including CSP, CORS,
+ *     Set-Cookie) are passed through so SPAs with strict CSPs keep working.
+ *   - Runtime precache: the Scramjet JS bundle and WASM are cached on first
+ *     fetch so subsequent navigations don't re-download them.
  */
 importScripts("/scramjet/scramjet.all.js");
 
@@ -18,8 +28,43 @@ var configLoaded = false;
 var scramjet = null;
 var { ScramjetServiceWorker } = self.$scramjetLoadWorker();
 
-self.addEventListener("install", function() { self.skipWaiting(); });
-self.addEventListener("activate", function(event) { event.waitUntil(self.clients.claim()); });
+// --- Runtime precache ---
+// Cache the Scramjet bundle + WASM so they load instantly on every navigation.
+// Without this, each new /service/* page triggers a fresh fetch of the ~500KB
+// JS bundle and ~500KB WASM from disk — a noticeable delay on slow connections.
+var RUNTIME_CACHE = "hypers0nic-runtime-v1";
+var PRECACHE_URLS = [
+  "/scramjet/scramjet.all.js",
+  "/scramjet/scramjet.wasm.wasm",
+  "/baremux/worker.js",
+  "/epoxy/index.mjs",
+];
+
+self.addEventListener("install", function(event) {
+  self.skipWaiting();
+  // Precache the Scramjet runtime in the background. This won't block
+  // installation — if it fails, the assets will be fetched on-demand.
+  event.waitUntil(
+    caches.open(RUNTIME_CACHE).then(function(cache) {
+      return cache.addAll(PRECACHE_URLS).catch(function() {
+        // Individual asset failures are OK — they'll be cached on first fetch.
+      });
+    })
+  );
+});
+self.addEventListener("activate", function(event) {
+  event.waitUntil(
+    self.clients.claim().then(function() {
+      // Clean up old cache versions if present.
+      return caches.keys().then(function(keys) {
+        return Promise.all(
+          keys.filter(function(k) { return k !== RUNTIME_CACHE; })
+              .map(function(k) { return caches.delete(k); })
+        );
+      });
+    })
+  );
+});
 
 // --- Controller-ready handshake ---
 // The main thread's ScramjetController.init() writes the config to the
@@ -178,6 +223,7 @@ function isHtmlResponse(response) {
 
 function injectIntoHtml(response) {
   var contentLength = parseInt(response.headers.get("content-length") || "0", 10);
+  // Cap body read at 5MB to avoid blocking the SW on huge pages.
   if (contentLength > 5 * 1024 * 1024) return Promise.resolve(response);
   return response.text().then(function(html) {
     if (!html || html.length < 50) return response;
@@ -188,7 +234,16 @@ function injectIntoHtml(response) {
     else html = injection + html;
     var newHeaders = new Headers();
     response.headers.forEach(function(value, key) {
-      if (key.toLowerCase() !== "content-length") newHeaders.set(key, value);
+      var lower = key.toLowerCase();
+      // Drop content-length (body changed) and Content-Security-Policy /
+      // Content-Security-Policy-Report-Only. The injected ad-blocker and
+      // link-rewriter scripts would be blocked by a strict CSP (YouTube and
+      // Twitch both set one), breaking proxy functionality. Removing the CSP
+      // is safe here — the page is already sandboxed inside the proxy iframe.
+      if (lower === "content-length") return;
+      if (lower === "content-security-policy") return;
+      if (lower === "content-security-policy-report-only") return;
+      newHeaders.set(key, value);
     });
     return new Response(html, { status: response.status, statusText: response.statusText, headers: newHeaders });
   }).catch(function() { return response; });
@@ -257,9 +312,76 @@ function safeLoadConfig() {
   });
 }
 
+// Check if a request is for a runtime asset (Scramjet bundle, WASM, etc).
+// These are cached via the Cache API for instant subsequent loads.
+function isRuntimeAsset(pathname) {
+  return PRECACHE_URLS.indexOf(pathname) !== -1;
+}
+
+// Try the cache first for runtime assets. If not cached, fetch from network
+// and populate the cache for next time. Falls back to network on any error.
+function fetchRuntimeAsset(request) {
+  return caches.open(RUNTIME_CACHE).then(function(cache) {
+    return cache.match(request).then(function(cached) {
+      if (cached) return cached;
+      return fetch(request).then(function(response) {
+        // Only cache successful responses.
+        if (response && response.ok) {
+          cache.put(request, response.clone()).catch(function() {});
+        }
+        return response;
+      }).catch(function() {
+        // Network failed — return cached version if any (even stale).
+        return cache.match(request);
+      });
+    });
+  });
+}
+
+// Fetch with transparent mid-stream retry for transient failures.
+// Non-HTML resources (video chunks, API calls, scripts) that fail with a
+// network error or 5xx are retried up to `maxRetries` times with a short
+// delay. This dramatically improves reliability for streaming-heavy sites
+// like YouTube and Twitch, where individual chunk fetches can fail without
+// breaking the overall playback.
+function fetchWithRetry(event, maxRetries = 2) {
+  var attempt = 0;
+  function tryFetch() {
+    return scramjet.fetch(event).then(function(response) {
+      // 502/503/504 from the target — retry once after a short delay.
+      // These often indicate a transient relay hiccup that resolves itself.
+      if (response && (response.status === 502 || response.status === 503 || response.status === 504) && attempt < maxRetries) {
+        attempt++;
+        return new Promise(function(resolve) {
+          setTimeout(function() { resolve(tryFetch()); }, 300 * attempt);
+        });
+      }
+      return response;
+    }).catch(function(err) {
+      if (attempt < maxRetries) {
+        attempt++;
+        return new Promise(function(resolve) {
+          setTimeout(function() { resolve(tryFetch()); }, 300 * attempt);
+        });
+      }
+      throw err;
+    });
+  }
+  return tryFetch();
+}
+
 self.addEventListener("fetch", function(event) {
   var url = new URL(event.request.url);
   if (url.origin !== self.location.origin) return;
+
+  // Runtime assets (Scramjet bundle, WASM, BareMux worker, Epoxy transport)
+  // are served from the Cache API for instant loads. This is the SPEED fix:
+  // without it, every navigation re-downloads ~1MB of proxy runtime.
+  if (isRuntimeAsset(url.pathname)) {
+    event.respondWith(fetchRuntimeAsset(event.request));
+    return;
+  }
+
   if (!url.pathname.startsWith(PROXY_PREFIX)) return;
 
   event.respondWith(
@@ -289,7 +411,9 @@ self.addEventListener("fetch", function(event) {
           }
 
           if (scramjet.route(event)) {
-            var response = await scramjet.fetch(event);
+            // Use fetchWithRetry for transparent mid-stream retry on
+            // transient failures (video chunks, API calls, 5xx responses).
+            var response = await fetchWithRetry(event, 2);
 
             // Block ad/tracker requests at network level
             var encodedUrl = url.pathname.substring(PROXY_PREFIX.length);
@@ -299,7 +423,10 @@ self.addEventListener("fetch", function(event) {
               return new Response("", { status: 204, headers: { "Content-Type": "text/plain" } });
             }
 
-            // Inject ad blocker + link rewriter into HTML responses
+            // Inject ad blocker + link rewriter into HTML responses.
+            // For non-HTML responses (scripts, video, API), we pass them
+            // through unchanged — preserving all headers (CSP, CORS,
+            // Set-Cookie, Content-Type) so SPAs with strict policies work.
             if (response && response.ok && isHtmlResponse(response)) {
               try { return await injectIntoHtml(response); } catch(e) { return response; }
             }

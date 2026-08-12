@@ -5,7 +5,6 @@ import { getScramjet } from "@/lib/scramjet";
 import { useHypers0nic } from "@/store/hypers0nic";
 import { ProxyToolbar } from "./proxy-toolbar";
 import { Loader2, AlertTriangle, Globe } from "lucide-react";
-import { motion } from "framer-motion";
 
 type FrameStatus = "loading" | "loaded" | "error";
 
@@ -251,66 +250,42 @@ export function ProxyFrame() {
       <ProxyToolbar status={status} />
       <div className="relative flex-1 bg-background">
         {status === "loading" && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="absolute inset-0 z-10 overflow-hidden bg-background"
-          >
+          <div className="absolute inset-0 z-10 overflow-hidden bg-background">
+            {/* Skeleton loader — plain divs (not motion.div) prevent the
+                "Cannot read properties of null (reading 'removeChild')" error
+                that occurs when a motion component is mid-exit animation and
+                the parent unmounts (e.g. rapid navigation). The skeleton-block
+                class has its own CSS animation, so no JS animation needed. */}
             <div className="mx-auto max-w-4xl space-y-4 p-6">
-              <motion.div
-                initial={{ opacity: 0, y: -8 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.3, delay: 0 }}
-                className="flex items-center gap-3"
-              >
+              <div className="flex items-center gap-3">
                 <div className="skeleton-block h-8 w-8 rounded-full" />
                 <div className="skeleton-block h-6 flex-1 rounded-md" />
                 <div className="skeleton-block h-8 w-20 rounded-md" />
-              </motion.div>
-              <motion.div
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.3, delay: 0.08 }}
-                className="space-y-2"
-              >
+              </div>
+              <div className="space-y-2">
                 <div className="skeleton-block h-8 w-2/3 rounded-lg" />
                 <div className="skeleton-block h-4 w-full rounded-md" />
                 <div className="skeleton-block h-4 w-5/6 rounded-md" />
-              </motion.div>
-              <motion.div
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.3, delay: 0.16 }}
-                className="grid grid-cols-2 gap-4 pt-2 sm:grid-cols-3"
-              >
+              </div>
+              <div className="grid grid-cols-2 gap-4 pt-2 sm:grid-cols-3">
                 <div className="skeleton-block h-32 rounded-xl" />
                 <div className="skeleton-block h-32 rounded-xl" />
                 <div className="skeleton-block hidden h-32 rounded-xl sm:block" />
-              </motion.div>
-              <motion.div
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.3, delay: 0.24 }}
-                className="space-y-2 pt-2"
-              >
+              </div>
+              <div className="space-y-2 pt-2">
                 <div className="skeleton-block h-4 w-full rounded-md" />
                 <div className="skeleton-block h-4 w-4/5 rounded-md" />
                 <div className="skeleton-block h-4 w-3/4 rounded-md" />
-              </motion.div>
+              </div>
             </div>
-            <motion.div
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.3, delay: 0.32 }}
-              className="absolute bottom-6 left-1/2 -translate-x-1/2"
-            >
+            {/* Floating status pill */}
+            <div className="absolute bottom-6 left-1/2 -translate-x-1/2">
               <div className="flex items-center gap-2 rounded-full border border-primary/20 bg-card/80 px-4 py-2 text-sm shadow-lg backdrop-blur-md">
                 <Loader2 className="size-4 animate-spin text-primary" />
                 <span className="font-medium text-foreground">Routing through Scramjet…</span>
               </div>
-            </motion.div>
-          </motion.div>
+            </div>
+          </div>
         )}
         {status === "error" && (
           <div className="absolute inset-0 z-20 flex items-center justify-center p-6">
@@ -338,7 +313,19 @@ export function ProxyFrame() {
             ref={iframeRef}
             title="Proxied content"
             className="size-full border-0 bg-white"
-            allow="fullscreen; autoplay; encrypted-media; clipboard-read; clipboard-write; picture-in-picture"
+            // `allow-same-origin` is REQUIRED for YouTube, Twitch, and most
+            // modern SPAs — their player APIs and login flows need to access
+            // document.cookie, localStorage, and same-origin APIs. Without it,
+            // YouTube's player throws "Blocked a frame with origin..." and
+            // Twitch's video never initializes.
+            //
+            // `allow-popups` lets proxied sites open new windows/popups.
+            // `allow-presentation` enables casting / PiP on video sites.
+            // `allow-storage-access-by-user-activation` allows 3rd-party cookie
+            // access prompts (used by some Google sign-in flows).
+            sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-presentation allow-storage-access-by-user-activation"
+            allow="fullscreen; autoplay; encrypted-media; clipboard-read; clipboard-write; picture-in-picture; web-share; gamepad; gyroscope; accelerometer"
+            referrerPolicy="no-referrer-when-downgrade"
           />
         )}
       </div>

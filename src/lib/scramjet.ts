@@ -47,6 +47,12 @@ class ScramjetManager {
   private listeners = new Set<Listener>();
   private initPromise: Promise<void> | null = null;
   private bundleLoaded = false;
+  // Transport connection reuse — a single BareMuxConnection is shared across
+  // all init() calls. Creating a new one each time leaks Web Workers and can
+  // leave zombie connections to the wisp relay, which eventually exhausts the
+  // browser's connection pool and causes "negotiating wisp" hangs.
+  private transportConn: any = null;
+  private transportUrl: string | null = null;
 
   subscribe(listener: Listener): () => void {
     this.listeners.add(listener);
@@ -153,8 +159,32 @@ class ScramjetManager {
   }
 
   private async setupTransport(wispUrl: string): Promise<void> {
+    // Reuse existing transport if it's already connected to the same URL.
+    // This prevents leaking BareMuxConnection workers on re-init.
+    if (this.transportConn && this.transportUrl === wispUrl) {
+      // Health check: verify the transport is still alive.
+      try {
+        const port = this.transportConn.getInnerPort?.();
+        if (port && typeof port === "object" && "postMessage" in port) {
+          return; // Transport is alive, reuse it.
+        }
+      } catch {
+        // Health check failed — fall through to reconnect.
+      }
+      this.transportUrl = null;
+    }
+
+    // Validate the wisp URL before attempting connection
+    if (!wispUrl || (!wispUrl.startsWith("ws://") && !wispUrl.startsWith("wss://"))) {
+      wispUrl = FALLBACK_WISP_SERVERS[0];
+    }
+
     const { BareMuxConnection } = await import("@mercuryworkshop/bare-mux");
-    const conn = new BareMuxConnection("/baremux/worker.js");
+
+    if (!this.transportConn) {
+      this.transportConn = new BareMuxConnection("/baremux/worker.js");
+    }
+    const conn = this.transportConn;
 
     const localRelay = this.resolveLocalRelay();
     const candidates = [wispUrl, ...FALLBACK_WISP_SERVERS, localRelay].filter(
@@ -170,10 +200,11 @@ class ScramjetManager {
         const timeoutPromise = new Promise<never>((_, reject) =>
           setTimeout(
             () => reject(new Error(`transport timeout for ${candidate}`)),
-            30000
+            15000
           )
         );
         await Promise.race([transportPromise, timeoutPromise]);
+        this.transportUrl = candidate;
         return;
       } catch (err) {
         console.warn(`[hypers0nic] transport failed for ${candidate}:`, err);
@@ -185,6 +216,19 @@ class ScramjetManager {
         lastError instanceof Error ? lastError.message : String(lastError)
       }`
     );
+  }
+
+  /**
+   * Force reconnect the transport. Called when a dead connection is detected.
+   * Resets the init promise so the next init() call re-establishes the
+   * transport from scratch.
+   */
+  forceReconnect(): void {
+    this.initPromise = null;
+    this.transportUrl = null;
+    this.controller = null;
+    this.bundleLoaded = false;
+    this.setState({ status: "idle" });
   }
 
   private resolveLocalRelay(): string {

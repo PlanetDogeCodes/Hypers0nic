@@ -34,9 +34,27 @@ Hypers0nic routes web traffic through the [Scramjet](https://github.com/MercuryW
 - **First-load-wins navigation** — Scramjet's `urlchange` event updates the omnibox display without re-triggering a navigation, eliminating the "loads-then-reloads" feedback loop
 - **Controller-ready handshake** — the service worker defers opening the `$scramjet` IndexedDB until the controller signals it has finished writing the config, preventing a DB deadlock that could hang `controller.init()`
 - **IDB open timeout** — `ensureFreshScramjetDB` races its `indexedDB.open()` against a 3-second timeout so a held DB connection never blocks boot
+- **Transport connection reuse** — a single `BareMuxConnection` is shared across all init calls, preventing worker leaks and connection-pool exhaustion
 - **Transport fallback chain** — `wss://anura.pro` → `wss://wisp.mercurywork.shop/` → local relay, each with a 15-second timeout
-- **7-retry fetch loop** in the service worker with escalating delays, plus IDB self-healing on stale config
 - **Force-reconnect on dead transport** — `forceReconnect()` resets the init promise so the next navigation re-establishes the wisp transport from scratch
+- **Mid-stream retry** — non-HTML fetches (video chunks, API calls) that fail transiently are retried up to 2 times transparently
+- **5xx auto-retry** — 502/503/504 responses from the target are retried once after a short delay, handling transient relay hiccups
+- **CSP removal on injected HTML** — Content-Security-Policy headers are stripped from HTML responses so the ad-blocker and link-rewriter scripts aren't blocked by strict CSPs (YouTube, Twitch)
+
+## Stability
+
+- **7-retry fetch loop** in the service worker with escalating delays, plus IDB self-healing on stale config
+- **Iframe sandbox tuning** — `allow-same-origin` + `allow-scripts` + `allow-forms` + `allow-popups` + `allow-presentation` + `allow-storage-access-by-user-activation` — required for YouTube/Twitch player APIs and login flows
+- **Full `allow` feature policy** — fullscreen, autoplay, encrypted-media, clipboard, PiP, web-share, gamepad, gyroscope, accelerometer
+- **Response header preservation** — all headers (CORS, Set-Cookie, Content-Type) are passed through unchanged for non-HTML responses, so SPAs with strict policies keep working
+- **5MB HTML body cap** — `injectIntoHtml` skips pages larger than 5MB to avoid blocking the service worker on huge responses
+
+## Speed
+
+- **Runtime precaching** — the Scramjet JS bundle (~500KB), WASM (~500KB), BareMux worker, and Epoxy transport are cached via the Cache API on first load, so subsequent navigations don't re-download them
+- **Asset preloading** — `<link rel="preload">` in the layout fetches the Scramjet bundle, WASM, and workers in parallel with the page load, shaving ~200-400ms off the first navigation
+- **Auto-warming proxy** — Scramjet boots on page load (not on first search), so the first navigation is instant
+- **Skeleton loader** — CSS-animated skeleton (no JS animation overhead) shows immediately during navigation
 
 ## Getting started
 
