@@ -46,7 +46,14 @@ export function loadSettings(): Hypers0nicSettings {
   try {
     const raw = window.localStorage.getItem(SETTINGS_KEY);
     if (!raw) return DEFAULT_SETTINGS;
-    const parsed = JSON.parse(raw) as Partial<Hypers0nicSettings>;
+    const parsed = JSON.parse(raw);
+    // Validate the parsed value is a plain object (not null, array, or primitive).
+    // Corrupted localStorage can contain anything; this prevents deepMerge
+    // from producing a broken settings object.
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      window.localStorage.removeItem(SETTINGS_KEY);
+      return DEFAULT_SETTINGS;
+    }
     return deepMerge(DEFAULT_SETTINGS, parsed) as Hypers0nicSettings;
   } catch {
     return DEFAULT_SETTINGS;
@@ -66,7 +73,13 @@ export function loadHistory(): HistoryEntry[] {
   if (typeof window === "undefined") return [];
   try {
     const raw = window.localStorage.getItem(HISTORY_KEY);
-    return raw ? (JSON.parse(raw) as HistoryEntry[]) : [];
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    // Filter out corrupt entries (missing required fields).
+    return parsed.filter(
+      (e: any) => e && typeof e.url === "string" && typeof e.visitedAt === "number"
+    ) as HistoryEntry[];
   } catch {
     return [];
   }
@@ -86,7 +99,12 @@ export function loadBookmarks(): Bookmark[] {
   if (typeof window === "undefined") return [];
   try {
     const raw = window.localStorage.getItem(BOOKMARKS_KEY);
-    return raw ? (JSON.parse(raw) as Bookmark[]) : [];
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (b: any) => b && typeof b.url === "string"
+    ) as Bookmark[];
   } catch {
     return [];
   }

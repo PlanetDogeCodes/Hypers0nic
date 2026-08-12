@@ -19,9 +19,13 @@ function format(date: Date): ClockState {
 
 /** Compact clock for the top bar — 12-hour format with AM/PM. */
 export function Clock({ className }: { className?: string }) {
-  const [state, setState] = useState<ClockState>(() => format(new Date()));
+  // Initialize with a static placeholder to prevent hydration mismatch.
+  // The server renders "--:--" and the client also renders "--:--" on the
+  // first pass, then the real time is set in useEffect after hydration.
+  const [state, setState] = useState<ClockState>({ time: "--:--", ampm: "" });
 
   useEffect(() => {
+    setState(format(new Date()));
     const id = setInterval(() => setState(format(new Date())), 1000);
     return () => clearInterval(id);
   }, []);
@@ -29,7 +33,7 @@ export function Clock({ className }: { className?: string }) {
   return (
     <span className={className}>
       <span className="tabular-nums">{state.time}</span>
-      <span className="ml-1 text-muted-foreground">{state.ampm}</span>
+      {state.ampm && <span className="ml-1 text-muted-foreground">{state.ampm}</span>}
     </span>
   );
 }

@@ -3,7 +3,6 @@
 import { useHypers0nic } from "@/store/hypers0nic";
 import { Shield, Zap, AlertTriangle, Loader2, Activity } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { motion } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
 
 export function ProxyHUD() {

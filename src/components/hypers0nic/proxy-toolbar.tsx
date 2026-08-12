@@ -22,7 +22,6 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { motion, AnimatePresence } from "framer-motion";
 
 export function ProxyToolbar({
   status,
@@ -90,18 +89,15 @@ export function ProxyToolbar({
           visible ? "translate-y-0" : "-translate-y-full"
         )}
       >
-        {/* Loading progress bar */}
-        <AnimatePresence>
-          {status === "loading" && (
-            <motion.div
-              initial={{ scaleX: 0 }}
-              animate={{ scaleX: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.3 }}
-              className="absolute bottom-0 left-0 right-0 h-0.5 origin-left bg-primary"
-            />
+        {/* Loading progress bar — CSS transition instead of motion.div to
+            avoid the removeChild error that occurs when AnimatePresence
+            tries to unmount during rapid navigation. */}
+        <div
+          className={cn(
+            "absolute bottom-0 left-0 right-0 h-0.5 origin-left bg-primary transition-all duration-300",
+            status === "loading" ? "scale-x-100 opacity-100" : "scale-x-0 opacity-0"
           )}
-        </AnimatePresence>
+        />
 
         <div className="flex items-center gap-2 px-3 py-2">
           {/* Navigation zone */}

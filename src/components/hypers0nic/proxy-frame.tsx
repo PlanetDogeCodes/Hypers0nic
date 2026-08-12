@@ -74,11 +74,13 @@ export function ProxyFrame() {
   }, [recordVisit]);
 
   // Mark a navigation as in-flight: reset guards, flip UI to loading, arm
-  // the 12-second safety timeout.
+  // the 12-second safety timeout. Also clears any previous error state so
+  // the user doesn't see a stale error message from a failed navigation.
   const beginNavigation = useCallback(() => {
     settledRef.current = false;
     recordedRef.current = false;
     setStatus("loading");
+    setError(null);
     if (safetyTimeoutRef.current) clearTimeout(safetyTimeoutRef.current);
     safetyTimeoutRef.current = setTimeout(() => {
       if (settledRef.current) return;
@@ -95,6 +97,7 @@ export function ProxyFrame() {
     const sj = getScramjet();
     let frame: typeof frameRef.current = null;
     let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
     const tryCreateFrame = (attempt: number) => {
       if (cancelled) return;
@@ -104,7 +107,7 @@ export function ProxyFrame() {
         setupFrameListeners();
       } catch (err) {
         if (attempt < 3 && !cancelled) {
-          setTimeout(() => tryCreateFrame(attempt + 1), 500 * (attempt + 1));
+          retryTimer = setTimeout(() => tryCreateFrame(attempt + 1), 500 * (attempt + 1));
         } else if (!cancelled) {
           const message = err instanceof Error ? err.message : String(err);
           queueMicrotask(() => {
@@ -156,6 +159,7 @@ export function ProxyFrame() {
 
     return function () {
       cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
       if (frame) {
         try {
           if (frame._onUrlChange) frame.removeEventListener("urlchange", frame._onUrlChange);

@@ -29,7 +29,7 @@ import {
   type FocusSessionRecord,
 } from "@/lib/storage";
 import { applyTheme } from "@/lib/themes";
-import { applyTabCloak } from "@/lib/tab-cloak";
+import { applyTabCloak, getPreset } from "@/lib/tab-cloak";
 import {
   getScramjet,
   registerServiceWorker,
@@ -108,6 +108,13 @@ interface Hypers0nicStore {
 
 let swRegistered = false;
 
+// When the app is opened inside an about:blank popup (via the openInAboutBlank
+// feature), it loads with a #go=<url> hash. This flag is set true on such
+// loads so that subsequent navigations happen IN-PLACE (within the popup)
+// instead of opening yet another about:blank popup. Without this, every link
+// click inside the popup would spawn a new popup, creating an infinite chain.
+let inAboutBlankPopup = false;
+
 export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
   hydrated: false,
   view: "home",
@@ -168,6 +175,31 @@ export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
     getScramjet().init(settings.wispUrl).catch(() => {
       // Silently ignore — will retry on first navigation.
     });
+
+    // --- Hash-based deep linking for about:blank popups ---
+    // When the openInAboutBlank feature opens a popup, it loads the app with
+    // a #go=<url> hash. On hydrate, we detect this hash, decode the target
+    // URL, set the inAboutBlankPopup flag (so navigations happen in-place
+    // instead of spawning more popups), and auto-navigate to the target.
+    if (typeof window !== "undefined" && window.location.hash) {
+      const hash = window.location.hash;
+      if (hash.startsWith("#go=")) {
+        const targetUrl = decodeURIComponent(hash.substring(4));
+        if (targetUrl) {
+          inAboutBlankPopup = true;
+          // Clear the hash so it doesn't interfere with future navigations
+          // or get picked up on refresh.
+          try {
+            window.history.replaceState(null, "", window.location.pathname);
+          } catch {}
+          // Defer navigation to allow the UI to mount first. The ProxyFrame
+          // component needs to be rendered before we can drive the iframe.
+          setTimeout(() => {
+            get().navigate(targetUrl);
+          }, 800);
+        }
+      }
+    }
   },
 
   navigate: async (input) => {
@@ -177,28 +209,101 @@ export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
     const engine = getSearchEngine(settings.searchEngine);
     const target = normalizeInput(trimmed, engine);
 
-    // If the about:blank preference is enabled, open the proxied URL in a new
-    // about:blank tab. This creates a blank window and writes a meta-refresh
-    // redirect to the encoded proxy URL, so the tab appears as "about:blank"
-    // in the browser's tab list while loading the proxied content.
-    if (settings.preferences.openInAboutBlank) {
-      const sj = getScramjet();
+    // If the about:blank preference is enabled AND we're not already inside
+    // an about:blank popup, open the target in a new about:blank tab.
+    //
+    // Approach: open about:blank, then write a document containing a
+    // full-screen <iframe> that loads the app with a #go=<url> hash. The
+    // iframe is same-origin, so the service worker intercepts /service/*
+    // requests normally. The popup's address bar stays "about:blank"
+    // because no top-level navigation occurs — only the iframe navigates.
+    //
+    // The #go= hash is detected by hydrate() on the iframe's app load,
+    // which auto-navigates to the target URL and sets inAboutBlankPopup=true
+    // so subsequent navigations happen in-place.
+    //
+    // Fallbacks:
+    //   1. If window.open("about:blank") returns null (popup blocker),
+    //      fall back to opening the app URL directly in a new tab.
+    //   2. If that also fails, navigate in the current tab.
+    if (settings.preferences.openInAboutBlank && !inAboutBlankPopup) {
+      const appUrl =
+        window.location.origin +
+        window.location.pathname +
+        "#go=" +
+        encodeURIComponent(target);
+
+      // Determine the cloak title/icon for the popup document.
+      const cloak = settings.tabCloak;
+      const preset = cloak.enabled
+        ? getPreset(cloak.preset)
+        : getPreset("default");
+      const cloakTitle =
+        cloak.preset === "custom"
+          ? cloak.customTitle || "about:blank"
+          : cloak.enabled
+          ? preset.title
+          : "about:blank";
+      const cloakIcon =
+        cloak.preset === "custom"
+          ? cloak.customIcon || ""
+          : cloak.enabled
+          ? preset.icon || ""
+          : "";
+
+      // Build the popup HTML. The iframe fills the entire viewport. The
+      // title and favicon are set to match the current cloak so the popup
+      // tab blends in with the user's other tabs.
+      const faviconTag = cloakIcon
+        ? `<link rel="icon" href="${cloakIcon}">`
+        : "";
+      const popupHtml =
+        "<!DOCTYPE html><html><head><meta charset=\"utf-8\">" +
+        "<title>" + cloakTitle + "</title>" +
+        faviconTag +
+        "<style>" +
+        "html,body{margin:0;padding:0;overflow:hidden;background:#000;}" +
+        "iframe{width:100vw;height:100vh;border:0;}" +
+        "</style></head><body>" +
+        "<iframe src=\"" + appUrl + "\" allow=\"fullscreen;autoplay;encrypted-media;clipboard-read;clipboard-write;picture-in-picture\" sandbox=\"allow-same-origin allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-presentation allow-storage-access-by-user-activation\"></iframe>" +
+        "</body></html>";
+
+      // CRITICAL: window.open must be called synchronously within the user
+      // gesture (the Enter key press). Do NOT await anything before this
+      // call — popup blockers check for user-activation, which expires
+      // after any await.
+      let win: Window | null = null;
       try {
-        await sj.init(settings.wispUrl);
+        win = window.open("about:blank", "_blank");
       } catch {
-        /* will retry on next navigation */
+        win = null;
       }
-      if (!swRegistered) {
-        swRegistered = true;
-        await registerServiceWorker();
-      }
-      const encoded = sj.encodeUrl(target);
-      const win = window.open("about:blank", "_blank");
+
       if (win) {
-        win.document.write(
-          `<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=${encoded}"><title>about:blank</title></head><body></body></html>`
-        );
-        win.document.close();
+        try {
+          win.document.write(popupHtml);
+          win.document.close();
+        } catch {
+          // document.write failed (cross-origin restriction?) — fall back
+          // to opening the app URL directly. The address bar won't show
+          // about:blank, but the content will load.
+          try {
+            win.location.href = appUrl;
+          } catch {
+            // Last resort: navigate the current tab.
+            window.location.href = appUrl;
+          }
+        }
+      } else {
+        // Popup blocker prevented about:blank. Fall back to opening the
+        // app URL directly in a new tab. The address bar will show the
+        // app URL instead of about:blank, but the content still loads.
+        try {
+          window.open(appUrl, "_blank");
+        } catch {
+          // Last resort: navigate the current tab.
+          window.location.href = appUrl;
+        }
       }
       return;
     }

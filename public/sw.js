@@ -224,7 +224,7 @@ function isHtmlResponse(response) {
 function injectIntoHtml(response) {
   var contentLength = parseInt(response.headers.get("content-length") || "0", 10);
   // Cap body read at 5MB to avoid blocking the SW on huge pages.
-  if (contentLength > 5 * 1024 * 1024) return Promise.resolve(response);
+  if (contentLength > 5 * 1024 * 1024) return Promise.resolve(stripFrameHeaders(response));
   return response.text().then(function(html) {
     if (!html || html.length < 50) return response;
     var injection = AD_BLOCK_CSS + INJECT_SCRIPT;
@@ -235,18 +235,56 @@ function injectIntoHtml(response) {
     var newHeaders = new Headers();
     response.headers.forEach(function(value, key) {
       var lower = key.toLowerCase();
-      // Drop content-length (body changed) and Content-Security-Policy /
-      // Content-Security-Policy-Report-Only. The injected ad-blocker and
-      // link-rewriter scripts would be blocked by a strict CSP (YouTube and
-      // Twitch both set one), breaking proxy functionality. Removing the CSP
-      // is safe here — the page is already sandboxed inside the proxy iframe.
+      // Drop headers that would break the proxy iframe:
+      // - content-length: body changed by injection
+      // - content-security-policy / report-only: would block injected scripts
+      // - x-frame-options: would prevent the page from loading in an iframe
+      //   (critical for the about:blank popup feature, which loads proxied
+      //   content inside an iframe)
+      // - cross-origin-opener-policy / cross-origin-embedder-policy: can
+      //   isolate the iframe and break proxy communication
       if (lower === "content-length") return;
       if (lower === "content-security-policy") return;
       if (lower === "content-security-policy-report-only") return;
+      if (lower === "x-frame-options") return;
+      if (lower === "cross-origin-opener-policy") return;
+      if (lower === "cross-origin-embedder-policy") return;
+      if (lower === "cross-origin-embedder-policy-report-only") return;
       newHeaders.set(key, value);
     });
     return new Response(html, { status: response.status, statusText: response.statusText, headers: newHeaders });
   }).catch(function() { return response; });
+}
+
+// Strip frame-blocking and isolation headers from ANY response (HTML or
+// non-HTML). This ensures proxied content can always be displayed inside
+// the proxy iframe, even if the target site sets X-Frame-Options or COOP/COEP.
+// We create a new Response with the same body but cleaned headers.
+function stripFrameHeaders(response) {
+  if (!response) return response;
+  var modified = false;
+  var newHeaders = new Headers();
+  response.headers.forEach(function(value, key) {
+    var lower = key.toLowerCase();
+    if (lower === "x-frame-options" ||
+        lower === "cross-origin-opener-policy" ||
+        lower === "cross-origin-embedder-policy" ||
+        lower === "cross-origin-embedder-policy-report-only") {
+      modified = true;
+      return;
+    }
+    newHeaders.set(key, value);
+  });
+  if (!modified) return response; // No changes needed — return original.
+  try {
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: newHeaders,
+    });
+  } catch (e) {
+    return response; // If we can't clone (streaming), return original.
+  }
 }
 
 // --- IDB self-healing ---
@@ -424,13 +462,15 @@ self.addEventListener("fetch", function(event) {
             }
 
             // Inject ad blocker + link rewriter into HTML responses.
-            // For non-HTML responses (scripts, video, API), we pass them
-            // through unchanged — preserving all headers (CSP, CORS,
-            // Set-Cookie, Content-Type) so SPAs with strict policies work.
+            // For non-HTML responses (scripts, video, API), strip frame-
+            // blocking headers (X-Frame-Options, COOP/COEP) so the content
+            // can be displayed inside the proxy iframe. Other headers (CORS,
+            // Set-Cookie, Content-Type) are preserved so SPAs with strict
+            // policies keep working.
             if (response && response.ok && isHtmlResponse(response)) {
-              try { return await injectIntoHtml(response); } catch(e) { return response; }
+              try { return await injectIntoHtml(response); } catch(e) { return stripFrameHeaders(response); }
             }
-            return response;
+            return stripFrameHeaders(response);
           }
           // Not a scramjet route — pass through
           return await fetch(event.request);
