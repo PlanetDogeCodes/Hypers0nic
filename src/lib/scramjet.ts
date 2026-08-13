@@ -265,16 +265,35 @@ class ScramjetManager {
 
   encodeUrl(url: string): string {
     if (!this.controller) {
-      throw new Error("Scramjet is not initialised yet");
+      // Return a manually-encoded URL as a fallback. This allows the
+      // direct-iframe-src fallback in ProxyFrame to work even if the
+      // controller isn't initialized yet.
+      return SCRAMJET_PREFIX + encodeURIComponent(url);
     }
-    return this.controller.encodeUrl(url);
+    try {
+      return this.controller.encodeUrl(url);
+    } catch {
+      return SCRAMJET_PREFIX + encodeURIComponent(url);
+    }
   }
 
   decodeUrl(url: string): string {
     if (!this.controller) {
-      throw new Error("Scramjet is not initialised yet");
+      // Manual decode as fallback.
+      try {
+        const encoded = url.startsWith(SCRAMJET_PREFIX)
+          ? url.substring(SCRAMJET_PREFIX.length)
+          : url;
+        return decodeURIComponent(encoded);
+      } catch {
+        return url;
+      }
     }
-    return this.controller.decodeUrl(url);
+    try {
+      return this.controller.decodeUrl(url);
+    } catch {
+      return url;
+    }
   }
 
   createFrame(iframe: HTMLIFrameElement): any {
@@ -364,11 +383,14 @@ export async function registerServiceWorker(): Promise<boolean> {
     return false;
   }
   try {
-    const reg = await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+    // Register with updateViaCache: "none" so the SW always fetches the
+    // latest version (Tinf0il pattern). This prevents stale SW bugs.
+    const reg = await navigator.serviceWorker.register("/sw.js", {
+      scope: "/",
+      type: "classic",
+      updateViaCache: "none",
+    });
     await waitForController(reg, 10000);
-    // Verify the SW is actually controlling the page. This is the critical
-    // check that prevents the race condition where proxyReady is set before
-    // the SW can intercept /service/ requests.
     return !!navigator.serviceWorker.controller;
   } catch (err) {
     console.warn("[hypers0nic] service worker registration failed:", err);
@@ -380,11 +402,31 @@ async function waitForController(
   reg: ServiceWorkerRegistration,
   timeoutMs: number
 ): Promise<void> {
+  // If already controlling, return immediately.
   if (navigator.serviceWorker.controller) return;
-  const sw = reg.active || reg.installing || reg.waiting;
-  if (sw) {
-    if (reg.waiting) reg.waiting.postMessage("skipWaiting");
+
+  // Tinf0il-style state machine: handle active, installing, and waiting
+  // states explicitly.
+  if (reg.active) {
+    // An active SW exists but isn't controlling yet — it will be after
+    // the next controllerchange event.
+  } else if (reg.installing) {
+    // Wait for the installing SW to activate.
+    await new Promise<void>((resolve) => {
+      if (!reg.installing) return resolve();
+      const handler = () => {
+        if (reg.installing?.state === "activated" || reg.installing?.state === "redundant") {
+          reg.installing.removeEventListener("statechange", handler);
+          resolve();
+        }
+      };
+      reg.installing.addEventListener("statechange", handler);
+    });
+  } else if (reg.waiting) {
+    // A waiting SW exists — tell it to skip waiting so it activates.
+    reg.waiting.postMessage("skipWaiting");
   }
+
   await new Promise<void>((resolve) => {
     const onChange = () => {
       if (navigator.serviceWorker.controller) {

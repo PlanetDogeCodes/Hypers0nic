@@ -77,7 +77,13 @@ export function AppsPanel({
                 onClick={() => setActiveApp(null)}
                 className="rounded border border-border/20 px-2 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-card/40 hover:text-foreground"
               >
-                ← Back
+                ← Back to apps
+              </button>
+              <button
+                onClick={() => onOpenChange(false)}
+                className="rounded border border-border/20 px-2 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+              >
+                ✕ Close
               </button>
               <div className="ml-auto flex flex-wrap items-center gap-0.5">
                 {APPS.map((app) => {

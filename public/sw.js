@@ -295,57 +295,100 @@ function stripFrameHeaders(response) {
 // If the $scramjet DB exists but is missing object stores (the race condition
 // where the SW's loadConfig opened the DB before the controller created the
 // schema), delete it so the controller can recreate it cleanly.
+// All IDB operations are raced against a 5-second timeout to prevent hangs.
 function healScramjetDB() {
   return new Promise(function(resolve) {
     var DB_NAME = "$scramjet";
-    function checkAndHeal() {
-      try {
-        var req = indexedDB.open(DB_NAME);
-        req.onsuccess = function() {
-          var db = req.result;
-          var stores = Array.from(db.objectStoreNames);
-          db.close();
-          if (stores.length > 0 && stores.indexOf("config") !== -1) {
-            resolve(true);
-          } else {
-            // DB exists but is empty/corrupt — delete it
-            var delReq = indexedDB.deleteDatabase(DB_NAME);
-            delReq.onsuccess = function() { resolve(false); };
-            delReq.onerror = function() { resolve(false); };
-            delReq.onblocked = function() { resolve(false); };
-          }
-        };
-        req.onerror = function() { resolve(false); };
-        req.onupgradeneeded = function() {
-          // DB didn't exist — let it be created empty, the controller will
-          // populate it. Close immediately.
-          req.result.close();
-          resolve(false);
-        };
-      } catch (e) {
-        resolve(false);
-      }
+    var settled = false;
+    var timer = setTimeout(function() {
+      if (settled) return;
+      settled = true;
+      resolve(false);
+    }, 5000);
+    function done(val) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(val);
     }
-    checkAndHeal();
+    try {
+      var req = indexedDB.open(DB_NAME);
+      req.onsuccess = function() {
+        var db = req.result;
+        var stores = Array.from(db.objectStoreNames);
+        db.close();
+        if (stores.length > 0 && stores.indexOf("config") !== -1) {
+          done(true);
+        } else {
+          var delReq = indexedDB.deleteDatabase(DB_NAME);
+          delReq.onsuccess = function() { done(false); };
+          delReq.onerror = function() { done(false); };
+          delReq.onblocked = function() { done(false); };
+        }
+      };
+      req.onerror = function() { done(false); };
+      req.onupgradeneeded = function() {
+        req.result.close();
+        done(false);
+      };
+    } catch (e) {
+      done(false);
+    }
   });
 }
 
-// Safe loadConfig wrapper — heals the DB if the transaction fails
+// Safe loadConfig wrapper — heals the DB if the transaction fails.
+// Races loadConfig() against a 5-second timeout to prevent hangs.
+// Also validates the loaded config has the expected prefix to detect
+// stale/corrupt configs (the "Cannot read properties of undefined
+// (reading 'prefix')" error).
 function safeLoadConfig() {
-  return scramjet.loadConfig().then(function() {
-    configLoaded = true;
-  }).catch(function(err) {
-    // If it's the "object store not found" error, try healing the DB
-    if (err && (err.name === "NotFoundError" || (err.message && err.message.indexOf("object store") !== -1))) {
+  var configPromise = scramjet.loadConfig();
+  var timeoutPromise = new Promise(function(_, reject) {
+    setTimeout(function() { reject(new Error("loadConfig timeout")); }, 5000);
+  });
+  return Promise.race([configPromise, timeoutPromise]).then(function() {
+    // Validate the config has the expected prefix. If not, the config is
+    // stale or corrupt — heal the DB and retry.
+    if (scramjet.config && scramjet.config.prefix === PROXY_PREFIX) {
+      configLoaded = true;
+    } else {
+      console.warn("[hypers0nic/sw] Stale config detected (prefix mismatch), healing DB");
+      configLoaded = false;
       return healScramjetDB().then(function() {
-        // Wait a moment for the DB to settle, then retry
         return new Promise(function(resolve) { setTimeout(resolve, 500); });
       }).then(function() {
-        return scramjet.loadConfig().then(function() {
-          configLoaded = true;
+        var retryPromise = scramjet.loadConfig();
+        var retryTimeout = new Promise(function(_, reject) {
+          setTimeout(function() { reject(new Error("loadConfig retry timeout")); }, 5000);
+        });
+        return Promise.race([retryPromise, retryTimeout]).then(function() {
+          if (scramjet.config && scramjet.config.prefix === PROXY_PREFIX) {
+            configLoaded = true;
+          } else {
+            configLoaded = false;
+          }
         }).catch(function() {
-          // Still failing — mark as not loaded, the fetch handler will
-          // return a retry response
+          configLoaded = false;
+        });
+      });
+    }
+  }).catch(function(err) {
+    if (err && (err.name === "NotFoundError" || (err.message && err.message.indexOf("object store") !== -1))) {
+      return healScramjetDB().then(function() {
+        return new Promise(function(resolve) { setTimeout(resolve, 500); });
+      }).then(function() {
+        var retryPromise = scramjet.loadConfig();
+        var retryTimeout = new Promise(function(_, reject) {
+          setTimeout(function() { reject(new Error("loadConfig retry timeout")); }, 5000);
+        });
+        return Promise.race([retryPromise, retryTimeout]).then(function() {
+          if (scramjet.config && scramjet.config.prefix === PROXY_PREFIX) {
+            configLoaded = true;
+          } else {
+            configLoaded = false;
+          }
+        }).catch(function() {
           configLoaded = false;
         });
       });

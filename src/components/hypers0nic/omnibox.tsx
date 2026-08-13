@@ -42,6 +42,15 @@ export function Omnibox({
     if (autoFocus) inputRef.current?.focus();
   }, [autoFocus]);
 
+  // Clean up pending timers on unmount to prevent memory leaks and
+  // setState-after-unmount warnings.
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      if (blurTimer.current) clearTimeout(blurTimer.current);
+    };
+  }, []);
+
   const fetchSuggestions = useCallback(
     async (q: string) => {
       if (!q.trim()) {

@@ -140,7 +140,12 @@ export function loadFocusSessions(): FocusSessionRecord[] {
   if (typeof window === "undefined") return [];
   try {
     const raw = window.localStorage.getItem(FOCUS_SESSIONS_KEY);
-    return raw ? (JSON.parse(raw) as FocusSessionRecord[]) : [];
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (s: any) => s && typeof s.date === "string" && typeof s.duration === "number"
+    ) as FocusSessionRecord[];
   } catch {
     return [];
   }
@@ -216,7 +221,12 @@ export function loadCustomShortcuts(): CustomShortcut[] {
   if (typeof window === "undefined") return [];
   try {
     const raw = window.localStorage.getItem(CUSTOM_SHORTCUTS_KEY);
-    return raw ? (JSON.parse(raw) as CustomShortcut[]) : [];
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (s: any) => s && typeof s.url === "string" && typeof s.name === "string"
+    ) as CustomShortcut[];
   } catch {
     return [];
   }
