@@ -68,7 +68,6 @@ export interface Preferences {
   panicUrl: string;
   adBlockerEnabled: boolean;
   autoProxyLinks: boolean;
-  autoClearHistoryOnClose: boolean;
 }
 
 export interface TinfoilProfile {
@@ -105,13 +104,6 @@ export interface Bookmark {
   url: string;
   title: string;
   addedAt: number;
-  folder?: string;
-}
-
-export interface BookmarkFolder {
-  id: string;
-  name: string;
-  createdAt: number;
 }
 
 export interface CustomShortcut {
@@ -123,4 +115,19 @@ export interface CustomShortcut {
   /** Optional accent color (any CSS color). */
   color?: string;
   addedAt: number;
+}
+
+/**
+ * A single proxy tab. Each tab owns its own URL, title, and a per-tab
+ * navNonce (incremented when the tab is navigated). The global store
+ * `navNonce` (on Hypers0nicStore) is what ProxyFrame currently uses to
+ * trigger frame.go(); the per-tab navNonce is metadata that future
+ * UI (e.g. a tab-bar loading indicator) can use to know when a tab's
+ * content has been refreshed.
+ */
+export interface ProxyTab {
+  id: string;
+  url: string;
+  title: string;
+  navNonce: number;
 }

@@ -5,20 +5,25 @@ import { Header } from "./header";
 import { Footer } from "./footer";
 import { HomeView } from "./home-view";
 import { ProxyFrame } from "./proxy-frame";
+import { ProxyTabBar } from "./proxy-tab-bar";
 import { SettingsDialog } from "./settings-dialog";
 import { HistoryPanel } from "./history-panel";
 import { CommandPalette } from "./command-palette";
 import { AppsPanel } from "./apps-panel";
 import { Tinf0ilAuth } from "./tinf0il-auth";
 import { CookieManager } from "./cookie-manager";
+import { SwUpdateBanner } from "./sw-update-banner";
 import { useHypers0nic } from "@/store/hypers0nic";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { usePanicKey } from "@/hooks/use-panic-key";
 import { useTinfoilAutoSync } from "@/hooks/use-tinfoil-auto-sync";
+import { useTransportHealth } from "@/hooks/use-transport-health";
 import { applyTabCloak } from "@/lib/tab-cloak";
 
 export function AppShell() {
   const view = useHypers0nic((s) => s.view);
+  const tabs = useHypers0nic((s) => s.tabs);
+  const activeTabId = useHypers0nic((s) => s.activeTabId);
   const hydrate = useHypers0nic((s) => s.hydrate);
   const tabCloak = useHypers0nic((s) => s.settings.tabCloak);
   const topBarAlwaysVisible = useHypers0nic((s) => s.settings.preferences.topBarAlwaysVisible);
@@ -59,13 +64,35 @@ export function AppShell() {
     onOpenSettings: () => setSettingsOpen(true),
     onOpenHistory: () => setHistoryOpen((v) => !v),
     onOpenPalette: () => setPaletteOpen(true),
+    // Ctrl+Shift+A → quick-open the apps panel (Task 5).
+    onOpenApps: () => setAppsOpen(true),
+    // Ctrl+Shift+T → reopen the most recently closed tab (Task 5). Reads
+    // directly from the store via getState() to avoid subscribing this
+    // component to recentlyClosed (which would re-render AppShell on every
+    // tab close/open and cause needless child re-renders).
+    onReopenClosedTab: () => {
+      void useHypers0nic.getState().reopenClosedTab();
+    },
   });
 
   usePanicKey();
   useTinfoilAutoSync();
+  // Transport health monitor (Task 4). Pings the wisp relay every 30s and
+  // writes transportQuality + transportLatency into the store, which the
+  // ProxyHUD reads to render its connection-quality dot. The hook also
+  // auto-force-reconnects when the transport has been dead for 2 ticks.
+  // We intentionally don't use the return value here — the values flow
+  // through the store. (Destructuring keeps the call self-documenting;
+  // the cost is at most 1 re-render per 30s tick, which is negligible.)
+  useTransportHealth();
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
+      {/* SW update banner — rendered ABOVE the header so it temporarily
+          replaces it when a new version is available. Same height as the
+          header (h-12) so layout doesn't shift. Renders null when no
+          update is pending. */}
+      <SwUpdateBanner />
       <Header
         onOpenSettings={() => setSettingsOpen(true)}
         onOpenHistory={() => setHistoryOpen(true)}
@@ -80,7 +107,26 @@ export function AppShell() {
           {view === "home" ? (
             <HomeView onOpenHistory={() => setHistoryOpen(true)} />
           ) : (
-            <ProxyFrame />
+            <div className="flex flex-col">
+              {/* Tab bar — shown only when there are 2+ tabs. The component
+                  itself returns null for the single-tab case. */}
+              <ProxyTabBar />
+              {/* Render EVERY tab's ProxyFrame, but only display the active
+                  one. Inactive tabs stay mounted (their iframes keep their
+                  loaded state across tab switches — switching back is
+                  instant). Using display:none (rather than unmounting) is
+                  critical: unmounting would destroy the ScramjetFrame and
+                  force a full reload on every switch. */}
+              {tabs.map((tab) => (
+                <div
+                  key={tab.id}
+                  style={{ display: tab.id === activeTabId ? "block" : "none" }}
+                  aria-hidden={tab.id !== activeTabId}
+                >
+                  <ProxyFrame tabId={tab.id} />
+                </div>
+              ))}
+            </div>
           )}
         </main>
         {view === "home" && <Footer />}

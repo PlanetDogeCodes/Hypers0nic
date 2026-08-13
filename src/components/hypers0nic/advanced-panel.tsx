@@ -5,7 +5,7 @@ import { useHypers0nic } from "@/store/hypers0nic";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
-import { Server, RefreshCw, ExternalLink, CheckCircle2, XCircle, Download, Upload, Database, Trash2, BookmarkPlus } from "lucide-react";
+import { Server, RefreshCw, ExternalLink, CheckCircle2, XCircle, Download, Upload, Database, Trash2 } from "lucide-react";
 import { getScramjet } from "@/lib/scramjet";
 import {
   AlertDialog,
@@ -41,8 +41,6 @@ export function AdvancedPanel() {
   const [draft, setDraft] = useState(wispUrl);
   const [testing, setTesting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const bookmarkInputRef = useRef<HTMLInputElement>(null);
-  const importBookmarks = useHypers0nic((s) => s.importBookmarks);
 
   const handleSave = () => {
     setWispUrl(draft);
@@ -105,45 +103,12 @@ export function AdvancedPanel() {
     toast.success("Reset to the local relay.");
   };
 
-  const handleBookmarkImport = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      try {
-        const html = reader.result as string;
-        const parser = new DOMParser();
-        const doc = parser.parseFromString(html, "text/html");
-        const links = doc.querySelectorAll("a[href]");
-        const bookmarks: { url: string; title: string }[] = [];
-        links.forEach((a) => {
-          const href = a.getAttribute("href");
-          const title = a.textContent?.trim() || "";
-          if (href && (href.startsWith("http://") || href.startsWith("https://"))) {
-            bookmarks.push({ url: href, title });
-          }
-        });
-        if (bookmarks.length === 0) {
-          toast.error("No valid bookmarks found in the file.");
-          return;
-        }
-        importBookmarks(bookmarks);
-        toast.success(`Imported ${bookmarks.length} bookmark${bookmarks.length === 1 ? "" : "s"}.`);
-      } catch {
-        toast.error("Failed to parse bookmark file. Make sure it's an HTML bookmark export.");
-      }
-    };
-    reader.readAsText(file);
-    e.target.value = "";
-  };
-
   const handleResetAll = () => {
     // Wipe every localStorage key Hypers0nic owns.
     const keys = [
       "hypers0nic:settings:v1",
       "hypers0nic:history:v1",
       "hypers0nic:bookmarks:v1",
-      "hypers0nic:bookmark-folders:v1",
       "hypers0nic:focus-sessions:v1",
       "hypers0nic:custom-shortcuts:v1",
       "hypers0nic:notepad:v1",
@@ -253,33 +218,6 @@ export function AdvancedPanel() {
         <div className="flex items-center gap-2 rounded-lg bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
           <Database className="size-3.5 shrink-0 text-primary" />
           <span>Includes: settings, themes, tab cloak, bookmarks, history, shortcuts, focus data.</span>
-        </div>
-      </div>
-
-      {/* Import browser bookmarks */}
-      <div className="space-y-2">
-        <h3 className="text-sm font-semibold text-foreground">Import browser bookmarks</h3>
-        <p className="text-xs text-muted-foreground">
-          Import bookmarks from your browser's bookmark manager. Supports standard
-          HTML bookmark export format (Netscape Bookmark File).
-        </p>
-        <div className="flex gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => bookmarkInputRef.current?.click()}
-            className="gap-2"
-          >
-            <BookmarkPlus className="size-4" />
-            Import bookmarks
-          </Button>
-          <input
-            ref={bookmarkInputRef}
-            type="file"
-            accept="text/html,.html,.htm"
-            onChange={handleBookmarkImport}
-            className="hidden"
-          />
         </div>
       </div>
 

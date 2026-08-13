@@ -377,11 +377,6 @@ export function getScramjet(): ScramjetManager {
  * Register the Hypers0nic service worker and wait for it to actively control
  * the page. Returns true only if the SW is actively controlling, false if
  * registration failed or timed out.
- *
- * If the SW is registered and activated but not controlling the page (the
- * classic first-registration issue where clients.claim() has a delay), this
- * function reloads the page. The reload ensures the SW controls the page on
- * the next load. This is the 100% reliable fix for cold-start failures.
  */
 export async function registerServiceWorker(): Promise<boolean> {
   if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) {
@@ -389,16 +384,10 @@ export async function registerServiceWorker(): Promise<boolean> {
   }
   try {
     const reg = await navigator.serviceWorker.register("/sw.js", { scope: "/" });
-    await waitForController(reg, 30000);
-    // If the SW is registered and activated but not controlling the page,
-    // reload. On reload, the SW will control the page immediately.
-    if (!navigator.serviceWorker.controller && reg.active) {
-      console.log("[hypers0nic] SW activated but not controlling — reloading page");
-      window.location.reload();
-      // Return a promise that never resolves — the page is reloading.
-      // The caller should check for this and abort any pending navigation.
-      return new Promise<boolean>(() => {});
-    }
+    await waitForController(reg, 10000);
+    // Verify the SW is actually controlling the page. This is the critical
+    // check that prevents the race condition where proxyReady is set before
+    // the SW can intercept /service/ requests.
     return !!navigator.serviceWorker.controller;
   } catch (err) {
     console.warn("[hypers0nic] service worker registration failed:", err);

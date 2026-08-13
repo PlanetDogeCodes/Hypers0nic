@@ -1,11 +1,11 @@
-import type { Hypers0nicSettings, HistoryEntry, Bookmark, BookmarkFolder, CustomShortcut } from "./types";
+import type { Hypers0nicSettings, HistoryEntry, Bookmark, CustomShortcut, ProxyTab } from "./types";
 
 const SETTINGS_KEY = "hypers0nic:settings:v1";
 const HISTORY_KEY = "hypers0nic:history:v1";
 const BOOKMARKS_KEY = "hypers0nic:bookmarks:v1";
-const BOOKMARK_FOLDERS_KEY = "hypers0nic:bookmark-folders:v1";
 const FOCUS_SESSIONS_KEY = "hypers0nic:focus-sessions:v1";
 const CUSTOM_SHORTCUTS_KEY = "hypers0nic:custom-shortcuts:v1";
+const TABS_KEY = "hypers0nic:tabs:v1";
 
 export const DEFAULT_SETTINGS: Hypers0nicSettings = {
   theme: "hypers0nic",
@@ -36,7 +36,6 @@ export const DEFAULT_SETTINGS: Hypers0nicSettings = {
     panicUrl: "https://classroom.google.com",
     adBlockerEnabled: true,
     autoProxyLinks: true,
-    autoClearHistoryOnClose: false,
   },
   // Default wisp relay. Using wss://anura.pro as the public relay.
   wispUrl: "wss://anura.pro",
@@ -116,30 +115,6 @@ export function saveBookmarks(bookmarks: Bookmark[]) {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(bookmarks));
-  } catch {
-    /* ignore */
-  }
-}
-
-export function loadBookmarkFolders(): BookmarkFolder[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = window.localStorage.getItem(BOOKMARK_FOLDERS_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (f: any) => f && typeof f.id === "string" && typeof f.name === "string"
-    ) as BookmarkFolder[];
-  } catch {
-    return [];
-  }
-}
-
-export function saveBookmarkFolders(folders: BookmarkFolder[]) {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(BOOKMARK_FOLDERS_KEY, JSON.stringify(folders));
   } catch {
     /* ignore */
   }
@@ -264,6 +239,47 @@ export function saveCustomShortcuts(shortcuts: CustomShortcut[]) {
     window.localStorage.setItem(CUSTOM_SHORTCUTS_KEY, JSON.stringify(shortcuts));
   } catch {
     /* ignore */
+  }
+}
+
+/**
+ * Load persisted proxy tabs for session restore. Filters out entries that
+ * are missing required fields (id / url) so corrupt localStorage can't
+ * crash the app. Caps at 8 entries to match the in-app tab limit.
+ */
+export function loadTabs(): ProxyTab[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(TABS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter(
+        (t: any) =>
+          t && typeof t.id === "string" && typeof t.url === "string"
+      )
+      .map((t: any) => ({
+        id: t.id,
+        url: t.url,
+        // Default title to the URL if missing — every tab needs a title
+        // for the tab bar to display something.
+        title: typeof t.title === "string" ? t.title : t.url,
+        navNonce: typeof t.navNonce === "number" ? t.navNonce : 0,
+      }))
+      .slice(0, 8) as ProxyTab[];
+  } catch {
+    return [];
+  }
+}
+
+export function saveTabs(tabs: ProxyTab[]) {
+  if (typeof window === "undefined") return;
+  try {
+    // Cap at 8 to match the in-app tab limit and keep localStorage tidy.
+    window.localStorage.setItem(TABS_KEY, JSON.stringify(tabs.slice(0, 8)));
+  } catch {
+    /* quota / privacy mode — fail quietly */
   }
 }
 
