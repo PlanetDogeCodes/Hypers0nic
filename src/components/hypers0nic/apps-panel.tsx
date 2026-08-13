@@ -6,7 +6,10 @@ import {
   DialogContent,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Calculator, StickyNote, QrCode, Ruler, Pipette, KeyRound, Timer } from "lucide-react";
+import {
+  Calculator, StickyNote, QrCode, Ruler, Pipette, KeyRound, Timer,
+  Clock, FileText, Hash, AlignLeft, Dices, Lightbulb, MessageCircle,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Calculator as CalculatorApp } from "./calculator";
 import { Notepad } from "./notepad";
@@ -15,8 +18,15 @@ import { UnitConverter } from "./unit-converter";
 import { ColorPicker } from "./color-picker";
 import { PasswordGenerator } from "./password-generator";
 import { Stopwatch } from "./stopwatch";
+import { PomodoroTimer } from "./pomodoro-timer";
+import { MarkdownPreviewer } from "./markdown-previewer";
+import { HashGenerator } from "./hash-generator";
+import { LoremIpsumGenerator } from "./lorem-ipsum";
+import { DiceRoller } from "./dice-roller";
 
-type AppId = "calculator" | "notepad" | "qr" | "converter" | "color" | "password" | "stopwatch";
+type AppId =
+  | "calculator" | "notepad" | "qr" | "converter" | "color" | "password" | "stopwatch"
+  | "pomodoro" | "markdown" | "hash" | "lorem" | "dice";
 
 const APPS: { id: AppId; name: string; icon: React.ElementType; description: string }[] = [
   { id: "calculator", name: "Calculator", icon: Calculator, description: "Quick math" },
@@ -26,6 +36,11 @@ const APPS: { id: AppId; name: string; icon: React.ElementType; description: str
   { id: "color", name: "Color", icon: Pipette, description: "Picker" },
   { id: "password", name: "Password", icon: KeyRound, description: "Generator" },
   { id: "stopwatch", name: "Stopwatch", icon: Timer, description: "Timer" },
+  { id: "pomodoro", name: "Pomodoro", icon: Clock, description: "25/5 timer" },
+  { id: "markdown", name: "Markdown", icon: FileText, description: "Previewer" },
+  { id: "hash", name: "Hash", icon: Hash, description: "Generator" },
+  { id: "lorem", name: "Lorem", icon: AlignLeft, description: "Ipsum gen" },
+  { id: "dice", name: "Dice", icon: Dices, description: "Roller" },
 ];
 
 export function AppsPanel({
@@ -67,6 +82,16 @@ export function AppsPanel({
                 );
               })}
             </div>
+            <a
+              href="https://discord.gg/FPhHyut3S7"
+              target="_blank"
+              rel="noreferrer noopener"
+              className="mt-3 flex items-center justify-center gap-2 rounded border border-dashed border-border/30 px-3 py-2 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-primary"
+            >
+              <Lightbulb className="size-3.5" />
+              Suggest New Quick Apps
+              <MessageCircle className="size-3 text-primary/60" />
+            </a>
           </div>
         ) : (
           /* Active app view */
@@ -115,6 +140,11 @@ export function AppsPanel({
               {activeApp === "color" && <ColorPicker onClose={() => onOpenChange(false)} />}
               {activeApp === "password" && <PasswordGenerator onClose={() => onOpenChange(false)} />}
               {activeApp === "stopwatch" && <Stopwatch onClose={() => onOpenChange(false)} />}
+              {activeApp === "pomodoro" && <PomodoroTimer onClose={() => onOpenChange(false)} />}
+              {activeApp === "markdown" && <MarkdownPreviewer onClose={() => onOpenChange(false)} />}
+              {activeApp === "hash" && <HashGenerator onClose={() => onOpenChange(false)} />}
+              {activeApp === "lorem" && <LoremIpsumGenerator onClose={() => onOpenChange(false)} />}
+              {activeApp === "dice" && <DiceRoller onClose={() => onOpenChange(false)} />}
             </div>
           </div>
         )}

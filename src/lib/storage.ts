@@ -1,8 +1,9 @@
-import type { Hypers0nicSettings, HistoryEntry, Bookmark, CustomShortcut } from "./types";
+import type { Hypers0nicSettings, HistoryEntry, Bookmark, BookmarkFolder, CustomShortcut } from "./types";
 
 const SETTINGS_KEY = "hypers0nic:settings:v1";
 const HISTORY_KEY = "hypers0nic:history:v1";
 const BOOKMARKS_KEY = "hypers0nic:bookmarks:v1";
+const BOOKMARK_FOLDERS_KEY = "hypers0nic:bookmark-folders:v1";
 const FOCUS_SESSIONS_KEY = "hypers0nic:focus-sessions:v1";
 const CUSTOM_SHORTCUTS_KEY = "hypers0nic:custom-shortcuts:v1";
 
@@ -35,6 +36,7 @@ export const DEFAULT_SETTINGS: Hypers0nicSettings = {
     panicUrl: "https://classroom.google.com",
     adBlockerEnabled: true,
     autoProxyLinks: true,
+    autoClearHistoryOnClose: false,
   },
   // Default wisp relay. Using wss://anura.pro as the public relay.
   wispUrl: "wss://anura.pro",
@@ -114,6 +116,30 @@ export function saveBookmarks(bookmarks: Bookmark[]) {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(bookmarks));
+  } catch {
+    /* ignore */
+  }
+}
+
+export function loadBookmarkFolders(): BookmarkFolder[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(BOOKMARK_FOLDERS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (f: any) => f && typeof f.id === "string" && typeof f.name === "string"
+    ) as BookmarkFolder[];
+  } catch {
+    return [];
+  }
+}
+
+export function saveBookmarkFolders(folders: BookmarkFolder[]) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(BOOKMARK_FOLDERS_KEY, JSON.stringify(folders));
   } catch {
     /* ignore */
   }

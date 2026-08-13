@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/sheet";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { History, Search, Trash2, ExternalLink, Clock, X } from "lucide-react";
+import { History, Search, Trash2, ExternalLink, Clock, X, RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 function faviconFor(url: string): string {
@@ -53,6 +53,8 @@ export function HistoryPanel({
   const history = useHypers0nic((s) => s.history);
   const navigate = useHypers0nic((s) => s.navigate);
   const clearHistory = useHypers0nic((s) => s.clearHistory);
+  const recentlyClosed = useHypers0nic((s) => s.recentlyClosed);
+  const clearRecentlyClosed = useHypers0nic((s) => s.clearRecentlyClosed);
   const [query, setQuery] = useState("");
 
   const filtered = useMemo(() => {
@@ -129,6 +131,54 @@ export function HistoryPanel({
         </div>
 
         <div className="max-h-[calc(100vh-12rem)] overflow-y-auto">
+          {/* Recently Closed section */}
+          {!query && recentlyClosed.length > 0 && (
+            <div className="border-b border-border/20 py-2">
+              <div className="flex items-center justify-between px-5 py-1.5">
+                <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  <RotateCcw className="size-3 text-primary/60" />
+                  Recently closed
+                </span>
+                <button
+                  onClick={clearRecentlyClosed}
+                  className="text-[11px] text-muted-foreground hover:text-destructive"
+                >
+                  Clear
+                </button>
+              </div>
+              {recentlyClosed.slice(0, 5).map((item) => (
+                <button
+                  key={item.url + item.closedAt}
+                  onClick={() => {
+                    navigate(item.url);
+                    onOpenChange(false);
+                  }}
+                  className="group flex w-full items-center gap-3 px-5 py-2 text-left transition-colors hover:bg-muted/50"
+                >
+                  <img
+                    src={faviconFor(item.url)}
+                    alt=""
+                    className="size-4 shrink-0 rounded bg-muted/40"
+                    onError={(e) => {
+                      (e.currentTarget as HTMLImageElement).style.visibility = "hidden";
+                    }}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-xs text-foreground/90 group-hover:text-foreground">
+                      {item.title || hostnameOf(item.url)}
+                    </p>
+                    <p className="truncate text-[10px] text-muted-foreground">
+                      {hostnameOf(item.url)}
+                    </p>
+                  </div>
+                  <span className="text-[11px] tabular-nums text-muted-foreground">
+                    {timeAgo(item.closedAt)}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+
           {filtered.length === 0 ? (
             <div className="flex flex-col items-center justify-center gap-3 px-6 py-16 text-center">
               <div className="flex size-14 items-center justify-center rounded-2xl bg-muted/40">

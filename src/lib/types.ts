@@ -68,6 +68,7 @@ export interface Preferences {
   panicUrl: string;
   adBlockerEnabled: boolean;
   autoProxyLinks: boolean;
+  autoClearHistoryOnClose: boolean;
 }
 
 export interface TinfoilProfile {
@@ -104,6 +105,13 @@ export interface Bookmark {
   url: string;
   title: string;
   addedAt: number;
+  folder?: string;
+}
+
+export interface BookmarkFolder {
+  id: string;
+  name: string;
+  createdAt: number;
 }
 
 export interface CustomShortcut {

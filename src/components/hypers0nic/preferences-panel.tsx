@@ -54,6 +54,11 @@ export function PreferencesPanel() {
       label: "Proxy image traffic",
       description: "Route images through Scramjet too (better privacy, slower).",
     },
+    {
+      key: "autoClearHistoryOnClose",
+      label: "Auto-clear history on tab close",
+      description: "Automatically delete browsing history when you close the tab. Off by default.",
+    },
   ];
 
   return (

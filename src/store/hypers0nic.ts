@@ -5,6 +5,7 @@ import type {
   Hypers0nicSettings,
   HistoryEntry,
   Bookmark,
+  BookmarkFolder,
   CustomShortcut,
   View,
   ThemeId,
@@ -19,6 +20,8 @@ import {
   saveHistory,
   loadBookmarks,
   saveBookmarks,
+  loadBookmarkFolders,
+  saveBookmarkFolders,
   loadFocusSessions,
   saveFocusSessions,
   countTodaySessions,
@@ -67,6 +70,10 @@ interface Hypers0nicStore {
 
   // --- bookmarks ---
   bookmarks: Bookmark[];
+  bookmarkFolders: BookmarkFolder[];
+
+  // --- recently closed ---
+  recentlyClosed: { url: string; title: string; closedAt: number }[];
 
   // --- custom shortcuts ---
   customShortcuts: CustomShortcut[];
@@ -97,9 +104,15 @@ interface Hypers0nicStore {
   disconnectTinfoil: () => void;
   recordVisit: (url: string, title: string) => void;
   clearHistory: () => void;
-  toggleBookmark: (url: string, title: string) => void;
+  toggleBookmark: (url: string, title: string, folder?: string) => void;
   isBookmarked: (url: string) => boolean;
   removeBookmark: (url: string) => void;
+  moveBookmarkToFolder: (url: string, folderId: string | null) => void;
+  addBookmarkFolder: (name: string) => void;
+  removeBookmarkFolder: (id: string) => void;
+  importBookmarks: (bookmarks: { url: string; title: string }[]) => void;
+  recordRecentlyClosed: (url: string, title: string) => void;
+  clearRecentlyClosed: () => void;
   toggleStealth: () => void;
   recordFocusSession: (durationMinutes: number) => void;
   addCustomShortcut: (shortcut: Omit<CustomShortcut, "id" | "addedAt">) => void;
@@ -108,6 +121,10 @@ interface Hypers0nicStore {
 
 let swRegistered = false;
 let swRegisterPromise: Promise<boolean> | null = null;
+// Set to true when the page is about to reload due to SW not controlling.
+// navigate() checks this and aborts if true, preventing it from setting
+// state that would persist across the reload and leave the app broken.
+let pendingReload = false;
 
 // When the app is opened inside an about:blank popup (via the openInAboutBlank
 // feature), it loads with a #go=<url> hash. This flag is set true on such
@@ -121,10 +138,14 @@ let inAboutBlankPopup = false;
 // multiple calls share the same registration promise, preventing race
 // conditions where hydrate() and navigate() both try to register the SW.
 function ensureServiceWorker(): Promise<boolean> {
-  if (swRegistered && typeof navigator !== "undefined" && navigator.serviceWorker?.controller) {
+  // Fast path: if the SW is already controlling, return immediately.
+  if (typeof navigator !== "undefined" && navigator.serviceWorker?.controller) {
+    swRegistered = true;
     return Promise.resolve(true);
   }
+  // If registration is in progress, wait for it.
   if (swRegisterPromise) return swRegisterPromise;
+  // Start a new registration.
   swRegisterPromise = registerServiceWorker().then((ok) => {
     swRegistered = ok;
     swRegisterPromise = null;
@@ -175,6 +196,8 @@ export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
   settings: DEFAULT_SETTINGS,
   history: [],
   bookmarks: [],
+  bookmarkFolders: [],
+  recentlyClosed: [],
   customShortcuts: [],
   focusSessions: [],
   todaySessionCount: 0,
@@ -187,12 +210,14 @@ export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
     const settings = loadSettings();
     const history = loadHistory();
     const bookmarks = loadBookmarks();
+    const bookmarkFolders = loadBookmarkFolders();
     const focusSessions = loadFocusSessions();
     const customShortcuts = loadCustomShortcuts();
     set({
       settings,
       history,
       bookmarks,
+      bookmarkFolders,
       customShortcuts,
       focusSessions,
       todaySessionCount: countTodaySessions(focusSessions),
@@ -214,8 +239,14 @@ export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
     // init Scramjet. This ordering prevents the race condition where the SW
     // intercepts a /service/ request before the controller has finished
     // booting. Both are non-blocking to hydration.
-    ensureServiceWorker().then(() => {
-      getScramjet().init(settings.wispUrl).catch(() => {});
+    //
+    // On a cold start, ensureServiceWorker() may trigger a page reload (if the
+    // SW is activated but not controlling). The .then() callback only runs if
+    // no reload was triggered — after reload, hydrate() runs fresh.
+    ensureServiceWorker().then((swOk) => {
+      if (swOk) {
+        getScramjet().init(settings.wispUrl).catch(() => {});
+      }
     });
 
     // --- Hash-based deep linking for about:blank popups ---
@@ -229,16 +260,15 @@ export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
         const targetUrl = decodeURIComponent(hash.substring(4));
         if (targetUrl) {
           inAboutBlankPopup = true;
-          // Clear the hash so it doesn't interfere with future navigations
-          // or get picked up on refresh.
           try {
             window.history.replaceState(null, "", window.location.pathname);
           } catch {}
-          // Defer navigation to allow the UI to mount first. The ProxyFrame
-          // component needs to be rendered before we can drive the iframe.
+          // Defer navigation to allow the UI to mount and the SW to register.
+          // On a cold start, ensureServiceWorker() may trigger a reload —
+          // this deferred navigate() will only run if no reload happened.
           setTimeout(() => {
             get().navigate(targetUrl);
-          }, 800);
+          }, 1500);
         }
       }
     }
@@ -249,9 +279,10 @@ export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
     if (typeof window !== "undefined" && window.location.pathname.startsWith("/site/")) {
       const targetUrl = parsePermalink(window.location.pathname + window.location.search + window.location.hash);
       if (targetUrl) {
+        // Defer navigation to allow the UI to mount and the SW to register.
         setTimeout(() => {
           get().navigate(targetUrl);
-        }, 800);
+        }, 1500);
       }
     }
 
@@ -266,6 +297,18 @@ export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
           set({ view: "home", omniboxValue: "", loading: false });
         }
       });
+
+      // --- Auto-clear history on tab close ---
+      // If the preference is enabled, clear history when the tab is closed.
+      // Uses the beforeunload event to ensure data is cleared before the
+      // tab is destroyed.
+      if (settings.preferences.autoClearHistoryOnClose) {
+        window.addEventListener("beforeunload", () => {
+          try {
+            window.localStorage.removeItem("hypers0nic:history:v1");
+          } catch {}
+        });
+      }
     }
   },
 
@@ -391,9 +434,31 @@ export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
       } catch {}
     }
 
-    // Boot scramjet with retry. The promise is memoised inside the manager
-    // so subsequent navigations are instant. If init fails, we force-reconnect
-    // and retry once before giving up — handles dropped transports.
+    // CRITICAL: Ensure the SW is registered and controlling BEFORE initializing
+    // Scramjet. The Scramjet controller needs to postMessage the SW
+    // ("releaseDB" and "controllerReady"), which requires the SW to be
+    // controlling. If we init Scramjet before the SW is ready, the messages
+    // are lost and the proxy never works.
+    //
+    // On a cold start, ensureServiceWorker() may trigger a page reload (if the
+    // SW is activated but not controlling). In that case, the navigate() call
+    // is aborted — the deferred permalink navigation will re-fire after the
+    // reload, once the SW is controlling.
+    let swOk = false;
+    try {
+      swOk = await ensureServiceWorker();
+    } catch {
+      swOk = false;
+    }
+    if (!swOk) {
+      console.error("[hypers0nic] service worker not controlling — navigation aborted");
+      set({ loading: false });
+      return;
+    }
+
+    // Now that the SW is controlling, boot Scramjet. The promise is memoised
+    // inside the manager so subsequent navigations are instant. If init fails,
+    // we force-reconnect and retry once before giving up.
     const sj = getScramjet();
     const tryInit = async () => {
       try {
@@ -408,23 +473,6 @@ export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
       await tryInit();
     } catch (err) {
       console.error("[hypers0nic] scramjet init failed on retry:", err);
-      set({ loading: false });
-      return;
-    }
-    // Ensure the SW is registered and controlling BEFORE setting proxyReady.
-    // Retry up to 3 times — on a cold start, the SW may need to download
-    // the Scramjet bundle (~500KB) which can take 20+ seconds on slow
-    // connections. Without retries, the first navigation after a cold
-    // start would fail.
-    let swOk = false;
-    for (let attempt = 0; attempt < 3 && !swOk; attempt++) {
-      if (attempt > 0) {
-        await new Promise((r) => setTimeout(r, 2000));
-      }
-      swOk = await ensureServiceWorker();
-    }
-    if (!swOk) {
-      console.error("[hypers0nic] service worker not controlling after 3 attempts");
       set({ loading: false });
       return;
     }
@@ -551,11 +599,11 @@ export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
     saveHistory([]);
   },
 
-  toggleBookmark: (url, title) => {
+  toggleBookmark: (url, title, folder) => {
     const existing = get().bookmarks;
     const next = existing.some((b) => b.url === url)
       ? existing.filter((b) => b.url !== url)
-      : [{ url, title: title || url, addedAt: Date.now() }, ...existing];
+      : [{ url, title: title || url, addedAt: Date.now(), folder }, ...existing];
     set({ bookmarks: next });
     saveBookmarks(next);
   },
@@ -566,6 +614,62 @@ export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
     const next = get().bookmarks.filter((b) => b.url !== url);
     set({ bookmarks: next });
     saveBookmarks(next);
+  },
+
+  moveBookmarkToFolder: (url, folderId) => {
+    const next = get().bookmarks.map((b) =>
+      b.url === url ? { ...b, folder: folderId || undefined } : b
+    );
+    set({ bookmarks: next });
+    saveBookmarks(next);
+  },
+
+  addBookmarkFolder: (name) => {
+    const folder: BookmarkFolder = {
+      id: `folder-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      name: name.trim() || "Untitled",
+      createdAt: Date.now(),
+    };
+    const next = [...get().bookmarkFolders, folder];
+    set({ bookmarkFolders: next });
+    saveBookmarkFolders(next);
+  },
+
+  removeBookmarkFolder: (id) => {
+    const next = get().bookmarkFolders.filter((f) => f.id !== id);
+    const bookmarks = get().bookmarks.map((b) =>
+      b.folder === id ? { ...b, folder: undefined } : b
+    );
+    set({ bookmarkFolders: next, bookmarks });
+    saveBookmarkFolders(next);
+    saveBookmarks(bookmarks);
+  },
+
+  importBookmarks: (imported) => {
+    const existing = get().bookmarks;
+    const existingUrls = new Set(existing.map((b) => b.url));
+    const newBookmarks = imported
+      .filter((b) => b.url && !existingUrls.has(b.url))
+      .map((b) => ({
+        url: b.url,
+        title: b.title || b.url,
+        addedAt: Date.now(),
+      }));
+    const next = [...newBookmarks, ...existing];
+    set({ bookmarks: next });
+    saveBookmarks(next);
+  },
+
+  recordRecentlyClosed: (url, title) => {
+    const next = [
+      { url, title: title || url, closedAt: Date.now() },
+      ...get().recentlyClosed.filter((r) => r.url !== url),
+    ].slice(0, 20);
+    set({ recentlyClosed: next });
+  },
+
+  clearRecentlyClosed: () => {
+    set({ recentlyClosed: [] });
   },
 
   toggleStealth: () => {

@@ -1,5 +1,5 @@
 import { Wordmark } from "./logo";
-import { Github, Zap } from "lucide-react";
+import { Github, Zap, MessageCircle } from "lucide-react";
 
 export function Footer() {
   return (
@@ -11,15 +11,26 @@ export function Footer() {
           <span className="text-border/40">·</span>
           <span>Scramjet interception proxy</span>
         </p>
-        <a
-          href="https://github.com/MercuryWorkshop/scramjet"
-          target="_blank"
-          rel="noreferrer noopener"
-          className="inline-flex items-center gap-1 transition-colors hover:text-foreground"
-        >
-          <Github className="size-3.5" />
-          Scramjet
-        </a>
+        <div className="flex items-center gap-3">
+          <a
+            href="https://discord.gg/FPhHyut3S7"
+            target="_blank"
+            rel="noreferrer noopener"
+            className="inline-flex items-center gap-1 transition-colors hover:text-foreground"
+          >
+            <MessageCircle className="size-3.5" />
+            Join Discord
+          </a>
+          <a
+            href="https://github.com/PlanetDogeCodes/Hypers0nic"
+            target="_blank"
+            rel="noreferrer noopener"
+            className="inline-flex items-center gap-1 transition-colors hover:text-foreground"
+          >
+            <Github className="size-3.5" />
+            Hypers0nic
+          </a>
+        </div>
       </div>
     </footer>
   );
