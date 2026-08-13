@@ -1,10 +1,11 @@
-import type { Hypers0nicSettings, HistoryEntry, Bookmark, CustomShortcut } from "./types";
+import type { Hypers0nicSettings, HistoryEntry, Bookmark, CustomShortcut, ProxyTab } from "./types";
 
 const SETTINGS_KEY = "hypers0nic:settings:v1";
 const HISTORY_KEY = "hypers0nic:history:v1";
 const BOOKMARKS_KEY = "hypers0nic:bookmarks:v1";
 const FOCUS_SESSIONS_KEY = "hypers0nic:focus-sessions:v1";
 const CUSTOM_SHORTCUTS_KEY = "hypers0nic:custom-shortcuts:v1";
+const TABS_KEY = "hypers0nic:tabs:v1";
 
 export const DEFAULT_SETTINGS: Hypers0nicSettings = {
   theme: "hypers0nic",
@@ -46,7 +47,14 @@ export function loadSettings(): Hypers0nicSettings {
   try {
     const raw = window.localStorage.getItem(SETTINGS_KEY);
     if (!raw) return DEFAULT_SETTINGS;
-    const parsed = JSON.parse(raw) as Partial<Hypers0nicSettings>;
+    const parsed = JSON.parse(raw);
+    // Validate the parsed value is a plain object (not null, array, or primitive).
+    // Corrupted localStorage can contain anything; this prevents deepMerge
+    // from producing a broken settings object.
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      window.localStorage.removeItem(SETTINGS_KEY);
+      return DEFAULT_SETTINGS;
+    }
     return deepMerge(DEFAULT_SETTINGS, parsed) as Hypers0nicSettings;
   } catch {
     return DEFAULT_SETTINGS;
@@ -66,7 +74,13 @@ export function loadHistory(): HistoryEntry[] {
   if (typeof window === "undefined") return [];
   try {
     const raw = window.localStorage.getItem(HISTORY_KEY);
-    return raw ? (JSON.parse(raw) as HistoryEntry[]) : [];
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    // Filter out corrupt entries (missing required fields).
+    return parsed.filter(
+      (e: any) => e && typeof e.url === "string" && typeof e.visitedAt === "number"
+    ) as HistoryEntry[];
   } catch {
     return [];
   }
@@ -86,7 +100,12 @@ export function loadBookmarks(): Bookmark[] {
   if (typeof window === "undefined") return [];
   try {
     const raw = window.localStorage.getItem(BOOKMARKS_KEY);
-    return raw ? (JSON.parse(raw) as Bookmark[]) : [];
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (b: any) => b && typeof b.url === "string"
+    ) as Bookmark[];
   } catch {
     return [];
   }
@@ -122,7 +141,12 @@ export function loadFocusSessions(): FocusSessionRecord[] {
   if (typeof window === "undefined") return [];
   try {
     const raw = window.localStorage.getItem(FOCUS_SESSIONS_KEY);
-    return raw ? (JSON.parse(raw) as FocusSessionRecord[]) : [];
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (s: any) => s && typeof s.date === "string" && typeof s.duration === "number"
+    ) as FocusSessionRecord[];
   } catch {
     return [];
   }
@@ -198,7 +222,12 @@ export function loadCustomShortcuts(): CustomShortcut[] {
   if (typeof window === "undefined") return [];
   try {
     const raw = window.localStorage.getItem(CUSTOM_SHORTCUTS_KEY);
-    return raw ? (JSON.parse(raw) as CustomShortcut[]) : [];
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (s: any) => s && typeof s.url === "string" && typeof s.name === "string"
+    ) as CustomShortcut[];
   } catch {
     return [];
   }
@@ -210,6 +239,47 @@ export function saveCustomShortcuts(shortcuts: CustomShortcut[]) {
     window.localStorage.setItem(CUSTOM_SHORTCUTS_KEY, JSON.stringify(shortcuts));
   } catch {
     /* ignore */
+  }
+}
+
+/**
+ * Load persisted proxy tabs for session restore. Filters out entries that
+ * are missing required fields (id / url) so corrupt localStorage can't
+ * crash the app. Caps at 8 entries to match the in-app tab limit.
+ */
+export function loadTabs(): ProxyTab[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(TABS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter(
+        (t: any) =>
+          t && typeof t.id === "string" && typeof t.url === "string"
+      )
+      .map((t: any) => ({
+        id: t.id,
+        url: t.url,
+        // Default title to the URL if missing — every tab needs a title
+        // for the tab bar to display something.
+        title: typeof t.title === "string" ? t.title : t.url,
+        navNonce: typeof t.navNonce === "number" ? t.navNonce : 0,
+      }))
+      .slice(0, 8) as ProxyTab[];
+  } catch {
+    return [];
+  }
+}
+
+export function saveTabs(tabs: ProxyTab[]) {
+  if (typeof window === "undefined") return;
+  try {
+    // Cap at 8 to match the in-app tab limit and keep localStorage tidy.
+    window.localStorage.setItem(TABS_KEY, JSON.stringify(tabs.slice(0, 8)));
+  } catch {
+    /* quota / privacy mode — fail quietly */
   }
 }
 

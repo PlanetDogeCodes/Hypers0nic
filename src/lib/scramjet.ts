@@ -47,6 +47,12 @@ class ScramjetManager {
   private listeners = new Set<Listener>();
   private initPromise: Promise<void> | null = null;
   private bundleLoaded = false;
+  // Transport connection reuse — a single BareMuxConnection is shared across
+  // all init() calls. Creating a new one each time leaks Web Workers and can
+  // leave zombie connections to the wisp relay, which eventually exhausts the
+  // browser's connection pool and causes "negotiating wisp" hangs.
+  private transportConn: any = null;
+  private transportUrl: string | null = null;
 
   subscribe(listener: Listener): () => void {
     this.listeners.add(listener);
@@ -83,8 +89,12 @@ class ScramjetManager {
     this.setState({ status: "loading", error: undefined });
     try {
       const wispUrl = this.resolveWispUrl(customWisp);
-      await this.setupTransport(wispUrl);
+      // Load the bundle FIRST, then set up transport. This order is more
+      // reliable: the bundle is a local file (fast, always succeeds), and
+      // the transport setup can take time (wisp negotiation). If transport
+      // fails, we still have the bundle loaded for the retry.
       await this.loadBundle();
+      await this.setupTransport(wispUrl);
       await ensureFreshScramjetDB();
 
       const factory = window.$scramjetLoadController!;
@@ -98,7 +108,24 @@ class ScramjetManager {
           decode: (u: string) => (u ? decodeURIComponent(u) : u),
         },
       });
-      await this.controller.init();
+      // Tell the SW to release its $scramjet DB connection so our
+      // controller.init() can write the config without being blocked.
+      try {
+        navigator.serviceWorker.controller?.postMessage("releaseDB");
+      } catch {}
+      await new Promise((r) => setTimeout(r, 200));
+      // Race controller.init() against a 20-second timeout. If it hangs
+      // (IDB deadlock, WASM issue), we throw and the caller can retry.
+      await Promise.race([
+        this.controller.init(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("controller.init() timeout")), 20000)
+        ),
+      ]);
+      // Tell the SW it can now safely read the config from IDB.
+      try {
+        navigator.serviceWorker.controller?.postMessage("controllerReady");
+      } catch {}
 
       this.setState({
         status: "ready",
@@ -140,8 +167,32 @@ class ScramjetManager {
   }
 
   private async setupTransport(wispUrl: string): Promise<void> {
+    // Reuse existing transport if it's already connected to the same URL.
+    // This prevents leaking BareMuxConnection workers on re-init.
+    if (this.transportConn && this.transportUrl === wispUrl) {
+      // Health check: verify the transport is still alive.
+      try {
+        const port = this.transportConn.getInnerPort?.();
+        if (port && typeof port === "object" && "postMessage" in port) {
+          return; // Transport is alive, reuse it.
+        }
+      } catch {
+        // Health check failed — fall through to reconnect.
+      }
+      this.transportUrl = null;
+    }
+
+    // Validate the wisp URL before attempting connection
+    if (!wispUrl || (!wispUrl.startsWith("ws://") && !wispUrl.startsWith("wss://"))) {
+      wispUrl = FALLBACK_WISP_SERVERS[0];
+    }
+
     const { BareMuxConnection } = await import("@mercuryworkshop/bare-mux");
-    const conn = new BareMuxConnection("/baremux/worker.js");
+
+    if (!this.transportConn) {
+      this.transportConn = new BareMuxConnection("/baremux/worker.js");
+    }
+    const conn = this.transportConn;
 
     const localRelay = this.resolveLocalRelay();
     const candidates = [wispUrl, ...FALLBACK_WISP_SERVERS, localRelay].filter(
@@ -157,10 +208,11 @@ class ScramjetManager {
         const timeoutPromise = new Promise<never>((_, reject) =>
           setTimeout(
             () => reject(new Error(`transport timeout for ${candidate}`)),
-            30000
+            15000
           )
         );
         await Promise.race([transportPromise, timeoutPromise]);
+        this.transportUrl = candidate;
         return;
       } catch (err) {
         console.warn(`[hypers0nic] transport failed for ${candidate}:`, err);
@@ -174,6 +226,37 @@ class ScramjetManager {
     );
   }
 
+  /**
+   * Force reconnect the transport. Called when a dead connection is detected.
+   * Resets the init promise so the next init() call re-establishes the
+   * transport from scratch. Also destroys the old transport connection to
+   * prevent zombie workers.
+   */
+  forceReconnect(): void {
+    this.initPromise = null;
+    this.transportUrl = null;
+    this.controller = null;
+    // Don't destroy the transportConn — reuse it on next init. Destroying
+    // it can leave orphaned workers. Instead, just mark it for re-setup.
+    this.setState({ status: "idle" });
+  }
+
+  /**
+   * Check if the transport is healthy. Called before each navigation to
+   * catch dead connections early (the wisp relay may have restarted).
+   * Returns true if the transport is alive and ready.
+   */
+  isTransportHealthy(): boolean {
+    if (!this.transportConn || !this.transportUrl) return false;
+    if (this.state.status !== "ready") return false;
+    try {
+      const port = this.transportConn.getInnerPort?.();
+      return !!(port && typeof port === "object" && "postMessage" in port);
+    } catch {
+      return false;
+    }
+  }
+
   private resolveLocalRelay(): string {
     if (typeof window === "undefined") return "";
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -182,16 +265,35 @@ class ScramjetManager {
 
   encodeUrl(url: string): string {
     if (!this.controller) {
-      throw new Error("Scramjet is not initialised yet");
+      // Return a manually-encoded URL as a fallback. This allows the
+      // direct-iframe-src fallback in ProxyFrame to work even if the
+      // controller isn't initialized yet.
+      return SCRAMJET_PREFIX + encodeURIComponent(url);
     }
-    return this.controller.encodeUrl(url);
+    try {
+      return this.controller.encodeUrl(url);
+    } catch {
+      return SCRAMJET_PREFIX + encodeURIComponent(url);
+    }
   }
 
   decodeUrl(url: string): string {
     if (!this.controller) {
-      throw new Error("Scramjet is not initialised yet");
+      // Manual decode as fallback.
+      try {
+        const encoded = url.startsWith(SCRAMJET_PREFIX)
+          ? url.substring(SCRAMJET_PREFIX.length)
+          : url;
+        return decodeURIComponent(encoded);
+      } catch {
+        return url;
+      }
     }
-    return this.controller.decodeUrl(url);
+    try {
+      return this.controller.decodeUrl(url);
+    } catch {
+      return url;
+    }
   }
 
   createFrame(iframe: HTMLIFrameElement): any {
@@ -223,15 +325,31 @@ async function ensureFreshScramjetDB(): Promise<void> {
   try {
     stores = await new Promise<string[]>((resolve, reject) => {
       const req = indexedDB.open(DB_NAME);
+      // The SW may hold an open connection to $scramjet, which blocks this
+      // open request indefinitely. Race against a 3-second timeout so the
+      // proxy can still boot — controller.init() will handle the DB.
+      const timer = setTimeout(() => {
+        reject(new Error("IDB open timeout"));
+      }, 3000);
       req.onsuccess = () => {
+        clearTimeout(timer);
         const db = req.result;
         const names = Array.from(db.objectStoreNames);
         db.close();
         resolve(names);
       };
-      req.onerror = () => reject(req.error);
+      req.onerror = () => {
+        clearTimeout(timer);
+        reject(req.error);
+      };
+      req.onblocked = () => {
+        clearTimeout(timer);
+        reject(new Error("IDB open blocked"));
+      };
     });
   } catch {
+    // Open failed or timed out — skip the stale check and let the
+    // controller handle the DB (it will create or use the existing one).
     return;
   }
   if (stores.includes("config")) return;
@@ -257,19 +375,23 @@ export function getScramjet(): ScramjetManager {
 
 /**
  * Register the Hypers0nic service worker and wait for it to actively control
- * the page.
+ * the page. Returns true only if the SW is actively controlling, false if
+ * registration failed or timed out.
  */
-export async function registerServiceWorker(): Promise<ServiceWorkerRegistration | null> {
+export async function registerServiceWorker(): Promise<boolean> {
   if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) {
-    return null;
+    return false;
   }
   try {
     const reg = await navigator.serviceWorker.register("/sw.js", { scope: "/" });
-    await waitForController(reg, 8000);
-    return reg;
+    await waitForController(reg, 10000);
+    // Verify the SW is actually controlling the page. This is the critical
+    // check that prevents the race condition where proxyReady is set before
+    // the SW can intercept /service/ requests.
+    return !!navigator.serviceWorker.controller;
   } catch (err) {
     console.warn("[hypers0nic] service worker registration failed:", err);
-    return null;
+    return false;
   }
 }
 

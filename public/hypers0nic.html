@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Home - Classroom</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%234285f4'/%3E%3Cpath d='M50 25 L80 40 L50 55 L20 40 Z' fill='white'/%3E%3Cpath d='M25 45 L25 65 L50 75 L75 65 L75 45' fill='none' stroke='white' stroke-width='4'/%3E%3C/svg%3E" />
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#000;--fg:#fff;--muted:#888;--accent:#a855f7;--border:#222;--card:#0a0a0a}
+html,body{background:var(--bg);color:var(--fg);font-family:'Courier New',Consolas,Monaco,monospace;min-height:100vh;overflow:hidden}
+body{display:flex;flex-direction:column;align-items:center;justify-content:center}
+#loader{display:flex;flex-direction:column;align-items:center;gap:24px;padding:40px}
+.logo{font-size:48px;font-weight:bold;letter-spacing:-1px;animation:pulse 2s ease-in-out infinite}
+.logo span{color:var(--accent)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.6}}
+.status{font-size:13px;color:var(--muted);text-align:center;min-height:20px}
+.spinner{width:24px;height:24px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+#error{display:none;flex-direction:column;align-items:center;gap:20px;padding:40px;max-width:520px}
+#error h2{font-size:18px;color:var(--fg)}
+#error p{font-size:13px;color:var(--muted);text-align:center;line-height:1.6}
+.btn{background:transparent;color:var(--fg);border:1px solid var(--border);padding:10px 20px;font-family:inherit;font-size:13px;cursor:pointer;transition:all .15s;border-radius:4px}
+.btn:hover{border-color:var(--accent);color:var(--accent)}
+.btn.primary{border-color:var(--accent);color:var(--accent);background:rgba(168,85,247,.1)}
+.btn.primary:hover{background:rgba(168,85,247,.2)}
+.btn-group{display:flex;gap:12px;flex-wrap:wrap;justify-content:center}
+#settings{display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:100;align-items:center;justify-content:center}
+#settings.open{display:flex}
+.settings-card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:32px;max-width:440px;width:90%}
+.settings-card h3{font-size:16px;margin-bottom:16px}
+.settings-card label{display:block;font-size:11px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:1px}
+.settings-card input,.settings-card select{width:100%;background:var(--bg);border:1px solid var(--border);color:var(--fg);padding:10px 12px;font-family:inherit;font-size:13px;border-radius:4px;margin-bottom:16px}
+.settings-card input:focus,.settings-card select:focus{outline:none;border-color:var(--accent)}
+.hint{font-size:11px;color:var(--muted);margin-top:16px;line-height:1.5}
+#appFrame{position:fixed;top:0;left:0;width:100vw;height:100vh;border:0;background:var(--bg);z-index:1}
+.hidden{display:none!important}
+</style>
+</head>
+<body>
+<div id="loader">
+<div class="logo">Hyper<span>s0nic</span></div>
+<div class="spinner"></div>
+<div class="status" id="status">Connecting to relay…</div>
+</div>
+<div id="error">
+<h2>Couldn't reach Hypers0nic</h2>
+<p id="errorMsg">All mirror endpoints are blocked or unreachable. Try a different connection, add a custom mirror, or use the about:blank popup.</p>
+<div class="btn-group">
+<button class="btn primary" onclick="openAboutBlank()">Open in about:blank</button>
+<button class="btn" onclick="openSettings()">Add custom mirror</button>
+<button class="btn" onclick="retry()">Retry</button>
+</div>
+</div>
+<div id="settings">
+<div class="settings-card">
+<h3>Mirror & Cloak Settings</h3>
+<label for="mirrorInput">Custom mirror URL</label>
+<input type="text" id="mirrorInput" placeholder="https://your-mirror.vercel.app" />
+<label for="cloakSelect">Tab cloak</label>
+<select id="cloakSelect">
+<option value="classroom">Google Classroom</option>
+<option value="drive">Google Drive</option>
+<option value="docs">Google Docs</option>
+<option value="gmail">Gmail</option>
+<option value="canvas">Canvas LMS</option>
+<option value="default">Hypers0nic (no cloak)</option>
+</select>
+<label for="panicUrlInput">Panic URL (double-press Esc)</label>
+<input type="text" id="panicUrlInput" placeholder="https://classroom.google.com" />
+<div class="btn-group">
+<button class="btn primary" onclick="saveSettings()">Save & Reload</button>
+<button class="btn" onclick="closeSettings()">Cancel</button>
+</div>
+<p class="hint">Press <strong>M</strong> to open this panel. Press <strong>C</strong> to cycle cloaks. Double-press <strong>Esc</strong> to panic (close + redirect). The custom mirror is tried first. If it fails, the default mirrors are tried in order. Settings persist in localStorage.</p>
+</div>
+</div>
+<iframe id="appFrame" class="hidden"></iframe>
+<script>
+(function(){"use strict";
+var DEFAULT_MIRRORS=["https://hypers0nic.vercel.app"];
+var CLOAKS={
+classroom:{title:"Home - Classroom",icon:"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%234285f4'/%3E%3Cpath d='M50 25 L80 40 L50 55 L20 40 Z' fill='white'/%3E%3Cpath d='M25 45 L25 65 L50 75 L75 65 L75 45' fill='none' stroke='white' stroke-width='4'/%3E%3C/svg%3E"},
+drive:{title:"My Drive - Google Drive",icon:"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cpath d='M30 70 L15 45 L40 45 L55 70 Z' fill='%230f9d58'/%3E%3Cpath d='M30 70 L55 70 L70 45 L45 45 Z' fill='%23ffc107'/%3E%3Cpath d='M45 45 L70 45 L85 70 L60 70 Z' fill='%234285f4'/%3E%3C/svg%3E"},
+docs:{title:"Untitled document - Google Docs",icon:"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%234285f4'/%3E%3Crect x='30' y='20' width='40' height='60' rx='4' fill='white'/%3E%3Crect x='37' y='32' width='26' height='3' fill='%234285f4'/%3E%3Crect x='37' y='40' width='26' height='3' fill='%234285f4'/%3E%3Crect x='37' y='48' width='26' height='3' fill='%234285f4'/%3E%3C/svg%3E"},
+gmail:{title:"Inbox (1) - Gmail",icon:"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%23ea4335'/%3E%3Crect x='20' y='30' width='60' height='40' fill='white'/%3E%3Cpath d='M20 30 L50 55 L80 30' fill='none' stroke='%23ea4335' stroke-width='4'/%3E%3C/svg%3E"},
+canvas:{title:"Dashboard - Canvas",icon:"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%23e72429'/%3E%3Ccircle cx='50' cy='50' r='25' fill='none' stroke='white' stroke-width='4'/%3E%3Ccircle cx='50' cy='50' r='10' fill='white'/%3E%3C/svg%3E"},
+default:{title:"Hypers0nic",icon:"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' fill='black'/%3E%3Ctext y='68' x='50' font-size='48' font-weight='bold' text-anchor='middle' fill='white' font-family='monospace'%3EH%3C/text%3E%3C/svg%3E"}
+};
+var settings=loadSettings();
+var mirrors=buildMirrorList();
+var currentMirrorIdx=0;
+var loadTimeout=null;
+var panicLastPress=0;
+var loader=document.getElementById("loader");
+var statusEl=document.getElementById("status");
+var errorEl=document.getElementById("error");
+var errorMsg=document.getElementById("errorMsg");
+var settingsEl=document.getElementById("settings");
+var mirrorInput=document.getElementById("mirrorInput");
+var cloakSelect=document.getElementById("cloakSelect");
+var panicUrlInput=document.getElementById("panicUrlInput");
+var appFrame=document.getElementById("appFrame");
+function loadSettings(){try{var raw=localStorage.getItem("hypers0nic-loader:settings");if(!raw)return defaultSettings();var parsed=JSON.parse(raw);return Object.assign(defaultSettings(),parsed);}catch(e){return defaultSettings();}}
+function defaultSettings(){return{customMirror:"",cloak:"classroom",panicUrl:"https://classroom.google.com",panicKey:"Escape"};}
+function saveSettingsRaw(s){try{localStorage.setItem("hypers0nic-loader:settings",JSON.stringify(s));}catch(e){}}
+function buildMirrorList(){var list=[];if(settings.customMirror&&settings.customMirror.trim())list.push(settings.customMirror.trim());DEFAULT_MIRRORS.forEach(function(m){if(list.indexOf(m)===-1)list.push(m);});return list;}
+function applyCloak(name){var cloak=CLOAKS[name]||CLOAKS.classroom;document.title=cloak.title;var link=document.querySelector("link[rel='icon']");if(link){link.href=cloak.icon;}else{link=document.createElement("link");link.rel="icon";link.href=cloak.icon;document.head.appendChild(link);}}
+function cycleCloak(){var keys=Object.keys(CLOAKS);var idx=keys.indexOf(settings.cloak);idx=(idx+1)%keys.length;settings.cloak=keys[idx];saveSettingsRaw(settings);applyCloak(settings.cloak);}
+function setStatus(msg){statusEl.textContent=msg;}
+function showError(msg){errorMsg.textContent=msg||"All mirror endpoints are blocked or unreachable. Try a different connection, add a custom mirror, or use the about:blank popup.";loader.classList.add("hidden");errorEl.style.display="flex";}
+function hideError(){errorEl.style.display="none";loader.classList.remove("hidden");}
+function tryLoadMirror(idx){if(idx>=mirrors.length){showError();return;}var mirror=mirrors[idx];currentMirrorIdx=idx;setStatus("Connecting to "+mirror+"…");appFrame.src=mirror;appFrame.classList.remove("hidden");loader.classList.add("hidden");if(loadTimeout)clearTimeout(loadTimeout);loadTimeout=setTimeout(function(){setStatus("Mirror timed out, trying next…");appFrame.src="about:blank";appFrame.classList.add("hidden");loader.classList.remove("hidden");tryLoadMirror(idx+1);},15000);}
+appFrame.addEventListener("load",function(){setTimeout(function(){if(loadTimeout){clearTimeout(loadTimeout);loadTimeout=null;}loader.classList.add("hidden");appFrame.classList.remove("hidden");},500);});
+function retry(){hideError();mirrors=buildMirrorList();currentMirrorIdx=0;tryLoadMirror(0);}
+function openAboutBlank(){var mirror=mirrors[currentMirrorIdx]||DEFAULT_MIRRORS[0];var cloak=CLOAKS[settings.cloak]||CLOAKS.classroom;var appUrl=mirror+"#go="+encodeURIComponent(mirror);var win=null;try{win=window.open("about:blank","_blank");}catch(e){win=null;}if(win){try{win.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>'+cloak.title+'</title><link rel="icon" href="'+cloak.icon+'"><style>html,body{margin:0;padding:0;overflow:hidden;background:#000}iframe{width:100vw;height:100vh;border:0}</style></head><body><iframe src="'+mirror+'" allow="fullscreen;autoplay;encrypted-media;clipboard-read;clipboard-write;picture-in-picture"></iframe></body></html>');win.document.close();}catch(e){try{win.location.href=mirror;}catch(e2){window.location.href=mirror;}}}else{try{window.open(mirror,"_blank");}catch(e){window.location.href=mirror;}}}
+window.openAboutBlank=openAboutBlank;
+function openSettings(){mirrorInput.value=settings.customMirror||"";cloakSelect.value=settings.cloak||"classroom";panicUrlInput.value=settings.panicUrl||"https://classroom.google.com";settingsEl.classList.add("open");}
+function closeSettings(){settingsEl.classList.remove("open");}
+function saveSettings(){settings.customMirror=mirrorInput.value.trim();settings.cloak=cloakSelect.value;settings.panicUrl=panicUrlInput.value.trim()||"https://classroom.google.com";saveSettingsRaw(settings);closeSettings();applyCloak(settings.cloak);mirrors=buildMirrorList();currentMirrorIdx=0;retry();}
+window.openSettings=openSettings;window.closeSettings=closeSettings;window.saveSettings=saveSettings;window.retry=retry;
+function handlePanic(){try{window.location.href=settings.panicUrl||"https://classroom.google.com";}catch(e){}try{window.close();}catch(e){}}
+document.addEventListener("keydown",function(e){var tag=(e.target&&e.target.tagName)||"";if(/INPUT|TEXTAREA|SELECT/.test(tag)){if(e.key==="Escape"&&settingsEl.classList.contains("open"))closeSettings();return;}if(e.key===settings.panicKey||e.key==="Escape"){var now=Date.now();if(now-panicLastPress<500){handlePanic();return;}panicLastPress=now;if(e.key==="Escape"&&settingsEl.classList.contains("open"))closeSettings();return;}if(e.key==="m"||e.key==="M"){e.preventDefault();if(settingsEl.classList.contains("open"))closeSettings();else openSettings();return;}if(e.key==="c"||e.key==="C"){e.preventDefault();cycleCloak();return;}if(e.key==="r"||e.key==="R"){e.preventDefault();retry();return;}});
+applyCloak(settings.cloak);
+tryLoadMirror(0);
+window.__hypers0nicLoader={settings:settings,mirrors:mirrors,retry:retry,openSettings:openSettings,openAboutBlank:openAboutBlank,cycleCloak:cycleCloak};
+})();
+</script>
+</body>
+</html>

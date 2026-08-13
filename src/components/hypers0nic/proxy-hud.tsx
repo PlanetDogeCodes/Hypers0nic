@@ -3,11 +3,15 @@
 import { useHypers0nic } from "@/store/hypers0nic";
 import { Shield, Zap, AlertTriangle, Loader2, Activity } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { motion } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
 
 export function ProxyHUD() {
   const scramjet = useHypers0nic((s) => s.scramjet);
+  // Transport quality + latency come from the useTransportHealth hook via
+  // the global store (Task 4). Read here so the HUD re-renders when the
+  // 30s health tick updates them.
+  const transportQuality = useHypers0nic((s) => s.transportQuality);
+  const transportLatency = useHypers0nic((s) => s.transportLatency);
 
   const config = {
     idle: {
@@ -45,6 +49,18 @@ export function ProxyHUD() {
   const showDot = scramjet.status === "ready" || scramjet.status === "loading";
   const maskedIp = useScramblingIp(scramjet.status === "ready");
 
+  // Connection-quality dot (Task 4). Only shown when the proxy is ready —
+  // before that there's no transport to measure. Maps the coarse
+  // transportQuality bucket to a traffic-light colour, and shows the
+  // measured latency in ms next to it (omitted when latency is null, e.g.
+  // before the first probe completes or after a failed probe).
+  const qualityDotClass =
+    transportQuality === "good"
+      ? "bg-emerald-500"
+      : transportQuality === "poor"
+      ? "bg-amber-500"
+      : "bg-rose-500";
+
   return (
     <div className="mt-4 flex items-center gap-2.5">
       {showDot ? (
@@ -64,6 +80,16 @@ export function ProxyHUD() {
       <div className="min-w-0">
         <div className="flex items-center gap-2">
           <p className="text-xs font-semibold text-foreground">{config.label}</p>
+          {scramjet.status === "ready" && (
+            <span className="flex items-center gap-1" title={`Connection quality: ${transportQuality}`}>
+              <span className={cn("size-1.5 rounded-full", qualityDotClass)} />
+              {transportLatency !== null && (
+                <span className="font-mono text-[10px] text-muted-foreground">
+                  {transportLatency}ms
+                </span>
+              )}
+            </span>
+          )}
           {scramjet.version && scramjet.status === "ready" && (
             <span className="rounded border border-primary/30 px-1 py-0.5 text-[9px] font-medium text-primary">
               v{scramjet.version}

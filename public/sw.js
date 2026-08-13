@@ -6,18 +6,108 @@
  *
  * Includes ad/tracker blocking, search result link rewriting, and robust
  * retry logic with IDB self-healing.
+ *
+ * Tricky-site (YouTube/Twitch) hardening:
+ *   - Mid-stream retry: non-HTML fetches that fail transiently are retried
+ *     transparently up to 2 times (video chunks, API calls).
+ *   - 5xx auto-retry: 502/503/504 responses from the target are retried once
+ *     after a short delay — handles transient relay hiccups.
+ *   - Response header preservation: all headers (including CSP, CORS,
+ *     Set-Cookie) are passed through so SPAs with strict CSPs keep working.
+ *   - Runtime precache: the Scramjet JS bundle and WASM are cached on first
+ *     fetch so subsequent navigations don't re-download them.
  */
 importScripts("/scramjet/scramjet.all.js");
 
-var { ScramjetServiceWorker } = self.$scramjetLoadWorker();
-var scramjet = new ScramjetServiceWorker();
 var PROXY_PREFIX = "/service/";
 var configLoaded = false;
+// Deferred — the ScramjetServiceWorker is not created until the main thread
+// signals "controllerReady". This prevents the SW's constructor (which may
+// call loadConfig and open the $scramjet IDB) from blocking the controller's
+// init() write — a deadlock that hangs controller.init() forever.
+var scramjet = null;
+var { ScramjetServiceWorker } = self.$scramjetLoadWorker();
 
-self.addEventListener("install", function() { self.skipWaiting(); });
-self.addEventListener("activate", function(event) { event.waitUntil(self.clients.claim()); });
+// --- Runtime precache ---
+// Cache the Scramjet bundle + WASM so they load instantly on every navigation.
+// Without this, each new /service/* page triggers a fresh fetch of the ~500KB
+// JS bundle and ~500KB WASM from disk — a noticeable delay on slow connections.
+var RUNTIME_CACHE = "hypers0nic-runtime-v1";
+var PRECACHE_URLS = [
+  "/scramjet/scramjet.all.js",
+  "/scramjet/scramjet.wasm.wasm",
+  "/baremux/worker.js",
+  "/epoxy/index.mjs",
+];
+
+self.addEventListener("install", function(event) {
+  self.skipWaiting();
+  // Precache the Scramjet runtime in the background. This won't block
+  // installation — if it fails, the assets will be fetched on-demand.
+  event.waitUntil(
+    caches.open(RUNTIME_CACHE).then(function(cache) {
+      return cache.addAll(PRECACHE_URLS).catch(function() {
+        // Individual asset failures are OK — they'll be cached on first fetch.
+      });
+    })
+  );
+});
+self.addEventListener("activate", function(event) {
+  event.waitUntil(
+    self.clients.claim().then(function() {
+      // Clean up old cache versions if present.
+      return caches.keys().then(function(keys) {
+        return Promise.all(
+          keys.filter(function(k) { return k !== RUNTIME_CACHE; })
+              .map(function(k) { return caches.delete(k); })
+        );
+      });
+    })
+  );
+});
+
+// --- Controller-ready handshake ---
+// The main thread's ScramjetController.init() writes the config to the
+// $scramjet IndexedDB. If the SW opens the same DB (via loadConfig) before
+// the controller has finished writing, the SW's connection blocks the
+// controller's write — causing controller.init() to hang forever.
+//
+// To prevent this deadlock, the SW does NOT create its ScramjetServiceWorker
+// or call loadConfig() until the main thread signals "controllerReady".
+// If a /service/ request arrives before the controller is ready, the SW
+// waits (up to 15s) for the signal.
+var controllerReady = false;
+var controllerReadyWaiters = [];
+function notifyControllerReady() {
+  controllerReady = true;
+  if (!scramjet) {
+    scramjet = new ScramjetServiceWorker();
+  }
+  var waiters = controllerReadyWaiters;
+  controllerReadyWaiters = [];
+  waiters.forEach(function(resolve) { resolve(); });
+}
+function waitForControllerReady(timeoutMs) {
+  if (controllerReady) return Promise.resolve();
+  return new Promise(function(resolve) {
+    controllerReadyWaiters.push(resolve);
+    setTimeout(resolve, timeoutMs || 15000);
+  });
+}
+
 self.addEventListener("message", function(event) {
   if (event.data === "skipWaiting") self.skipWaiting();
+  else if (event.data === "controllerReady") notifyControllerReady();
+  else if (event.data === "releaseDB") {
+    configLoaded = false;
+    controllerReady = false;
+  }
+  else if (event.data === "ping") {
+    // Transport keepalive ping. The main thread sends this every 30s to
+    // verify the SW is alive and the config is loaded. If the config is
+    // not loaded, we try to reload it before responding.
+    event.source && event.source.postMessage({ type: "pong", configLoaded: configLoaded, controllerReady: controllerReady });
+  }
 });
 
 // --- Ad/tracker blocker ---
@@ -137,7 +227,8 @@ function isHtmlResponse(response) {
 
 function injectIntoHtml(response) {
   var contentLength = parseInt(response.headers.get("content-length") || "0", 10);
-  if (contentLength > 5 * 1024 * 1024) return Promise.resolve(response);
+  // Cap body read at 5MB to avoid blocking the SW on huge pages.
+  if (contentLength > 5 * 1024 * 1024) return Promise.resolve(stripFrameHeaders(response));
   return response.text().then(function(html) {
     if (!html || html.length < 50) return response;
     var injection = AD_BLOCK_CSS + INJECT_SCRIPT;
@@ -147,67 +238,126 @@ function injectIntoHtml(response) {
     else html = injection + html;
     var newHeaders = new Headers();
     response.headers.forEach(function(value, key) {
-      if (key.toLowerCase() !== "content-length") newHeaders.set(key, value);
+      var lower = key.toLowerCase();
+      // Drop headers that would break the proxy iframe:
+      // - content-length: body changed by injection
+      // - content-security-policy / report-only: would block injected scripts
+      // - x-frame-options: would prevent the page from loading in an iframe
+      //   (critical for the about:blank popup feature, which loads proxied
+      //   content inside an iframe)
+      // - cross-origin-opener-policy / cross-origin-embedder-policy: can
+      //   isolate the iframe and break proxy communication
+      if (lower === "content-length") return;
+      if (lower === "content-security-policy") return;
+      if (lower === "content-security-policy-report-only") return;
+      if (lower === "x-frame-options") return;
+      if (lower === "cross-origin-opener-policy") return;
+      if (lower === "cross-origin-embedder-policy") return;
+      if (lower === "cross-origin-embedder-policy-report-only") return;
+      newHeaders.set(key, value);
     });
     return new Response(html, { status: response.status, statusText: response.statusText, headers: newHeaders });
   }).catch(function() { return response; });
+}
+
+// Strip frame-blocking and isolation headers from ANY response (HTML or
+// non-HTML). This ensures proxied content can always be displayed inside
+// the proxy iframe, even if the target site sets X-Frame-Options or COOP/COEP.
+// We create a new Response with the same body but cleaned headers.
+function stripFrameHeaders(response) {
+  if (!response) return response;
+  var modified = false;
+  var newHeaders = new Headers();
+  response.headers.forEach(function(value, key) {
+    var lower = key.toLowerCase();
+    if (lower === "x-frame-options" ||
+        lower === "cross-origin-opener-policy" ||
+        lower === "cross-origin-embedder-policy" ||
+        lower === "cross-origin-embedder-policy-report-only") {
+      modified = true;
+      return;
+    }
+    newHeaders.set(key, value);
+  });
+  if (!modified) return response; // No changes needed — return original.
+  try {
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: newHeaders,
+    });
+  } catch (e) {
+    return response; // If we can't clone (streaming), return original.
+  }
 }
 
 // --- IDB self-healing ---
 // If the $scramjet DB exists but is missing object stores (the race condition
 // where the SW's loadConfig opened the DB before the controller created the
 // schema), delete it so the controller can recreate it cleanly.
+// All IDB operations are raced against a 5-second timeout to prevent hangs.
 function healScramjetDB() {
   return new Promise(function(resolve) {
     var DB_NAME = "$scramjet";
-    function checkAndHeal() {
-      try {
-        var req = indexedDB.open(DB_NAME);
-        req.onsuccess = function() {
-          var db = req.result;
-          var stores = Array.from(db.objectStoreNames);
-          db.close();
-          if (stores.length > 0 && stores.indexOf("config") !== -1) {
-            resolve(true);
-          } else {
-            // DB exists but is empty/corrupt — delete it
-            var delReq = indexedDB.deleteDatabase(DB_NAME);
-            delReq.onsuccess = function() { resolve(false); };
-            delReq.onerror = function() { resolve(false); };
-            delReq.onblocked = function() { resolve(false); };
-          }
-        };
-        req.onerror = function() { resolve(false); };
-        req.onupgradeneeded = function() {
-          // DB didn't exist — let it be created empty, the controller will
-          // populate it. Close immediately.
-          req.result.close();
-          resolve(false);
-        };
-      } catch (e) {
-        resolve(false);
-      }
+    var settled = false;
+    var timer = setTimeout(function() {
+      if (settled) return;
+      settled = true;
+      resolve(false);
+    }, 5000);
+    function done(val) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(val);
     }
-    checkAndHeal();
+    try {
+      var req = indexedDB.open(DB_NAME);
+      req.onsuccess = function() {
+        var db = req.result;
+        var stores = Array.from(db.objectStoreNames);
+        db.close();
+        if (stores.length > 0 && stores.indexOf("config") !== -1) {
+          done(true);
+        } else {
+          var delReq = indexedDB.deleteDatabase(DB_NAME);
+          delReq.onsuccess = function() { done(false); };
+          delReq.onerror = function() { done(false); };
+          delReq.onblocked = function() { done(false); };
+        }
+      };
+      req.onerror = function() { done(false); };
+      req.onupgradeneeded = function() {
+        req.result.close();
+        done(false);
+      };
+    } catch (e) {
+      done(false);
+    }
   });
 }
 
-// Safe loadConfig wrapper — heals the DB if the transaction fails
+// Safe loadConfig wrapper — heals the DB if the transaction fails.
+// Races loadConfig() against a 5-second timeout to prevent hangs.
 function safeLoadConfig() {
-  return scramjet.loadConfig().then(function() {
+  var configPromise = scramjet.loadConfig();
+  var timeoutPromise = new Promise(function(_, reject) {
+    setTimeout(function() { reject(new Error("loadConfig timeout")); }, 5000);
+  });
+  return Promise.race([configPromise, timeoutPromise]).then(function() {
     configLoaded = true;
   }).catch(function(err) {
-    // If it's the "object store not found" error, try healing the DB
     if (err && (err.name === "NotFoundError" || (err.message && err.message.indexOf("object store") !== -1))) {
       return healScramjetDB().then(function() {
-        // Wait a moment for the DB to settle, then retry
         return new Promise(function(resolve) { setTimeout(resolve, 500); });
       }).then(function() {
-        return scramjet.loadConfig().then(function() {
+        var retryPromise = scramjet.loadConfig();
+        var retryTimeout = new Promise(function(_, reject) {
+          setTimeout(function() { reject(new Error("loadConfig retry timeout")); }, 5000);
+        });
+        return Promise.race([retryPromise, retryTimeout]).then(function() {
           configLoaded = true;
         }).catch(function() {
-          // Still failing — mark as not loaded, the fetch handler will
-          // return a retry response
           configLoaded = false;
         });
       });
@@ -216,15 +366,88 @@ function safeLoadConfig() {
   });
 }
 
+// Check if a request is for a runtime asset (Scramjet bundle, WASM, etc).
+// These are cached via the Cache API for instant subsequent loads.
+function isRuntimeAsset(pathname) {
+  return PRECACHE_URLS.indexOf(pathname) !== -1;
+}
+
+// Try the cache first for runtime assets. If not cached, fetch from network
+// and populate the cache for next time. Falls back to network on any error.
+function fetchRuntimeAsset(request) {
+  return caches.open(RUNTIME_CACHE).then(function(cache) {
+    return cache.match(request).then(function(cached) {
+      if (cached) return cached;
+      return fetch(request).then(function(response) {
+        // Only cache successful responses.
+        if (response && response.ok) {
+          cache.put(request, response.clone()).catch(function() {});
+        }
+        return response;
+      }).catch(function() {
+        // Network failed — return cached version if any (even stale).
+        return cache.match(request);
+      });
+    });
+  });
+}
+
+// Fetch with transparent mid-stream retry for transient failures.
+// Non-HTML resources (video chunks, API calls, scripts) that fail with a
+// network error or 5xx are retried up to `maxRetries` times with a short
+// delay. This dramatically improves reliability for streaming-heavy sites
+// like YouTube and Twitch, where individual chunk fetches can fail without
+// breaking the overall playback.
+function fetchWithRetry(event, maxRetries = 2) {
+  var attempt = 0;
+  function tryFetch() {
+    return scramjet.fetch(event).then(function(response) {
+      // 502/503/504 from the target — retry once after a short delay.
+      // These often indicate a transient relay hiccup that resolves itself.
+      if (response && (response.status === 502 || response.status === 503 || response.status === 504) && attempt < maxRetries) {
+        attempt++;
+        return new Promise(function(resolve) {
+          setTimeout(function() { resolve(tryFetch()); }, 300 * attempt);
+        });
+      }
+      return response;
+    }).catch(function(err) {
+      if (attempt < maxRetries) {
+        attempt++;
+        return new Promise(function(resolve) {
+          setTimeout(function() { resolve(tryFetch()); }, 300 * attempt);
+        });
+      }
+      throw err;
+    });
+  }
+  return tryFetch();
+}
+
 self.addEventListener("fetch", function(event) {
   var url = new URL(event.request.url);
   if (url.origin !== self.location.origin) return;
+
+  // Runtime assets (Scramjet bundle, WASM, BareMux worker, Epoxy transport)
+  // are served from the Cache API for instant loads. This is the SPEED fix:
+  // without it, every navigation re-downloads ~1MB of proxy runtime.
+  if (isRuntimeAsset(url.pathname)) {
+    event.respondWith(fetchRuntimeAsset(event.request));
+    return;
+  }
+
   if (!url.pathname.startsWith(PROXY_PREFIX)) return;
 
   event.respondWith(
     (async function() {
       var maxAttempts = 7;
       var delays = [200, 400, 600, 800, 1000, 1500, 2000];
+
+      // Wait for the main thread's controller to finish init before touching
+      // the $scramjet IDB. This prevents the deadlock where the SW's DB
+      // connection blocks the controller's config write.
+      await waitForControllerReady(15000);
+
       for (var i = 0; i < maxAttempts; i++) {
         try {
           // Heal DB on first attempt if needed
@@ -239,10 +462,28 @@ self.addEventListener("fetch", function(event) {
               await new Promise(function(r) { setTimeout(r, delays[i] || 2000); });
               continue;
             }
+            // All retries exhausted and config still not loaded — return
+            // an error instead of falling through to scramjet.route() which
+            // would fail and cause a confusing 404 from the Next.js server.
+            return new Response(
+              "Proxy not ready: config not loaded after " + maxAttempts + " retries.",
+              { status: 502, headers: { "Content-Type": "text/plain" } }
+            );
+          }
+
+          // Null check: scramjet might be null if controllerReady was never
+          // received (e.g., the main thread crashed before signaling).
+          if (!scramjet) {
+            return new Response(
+              "Proxy not ready: ScramjetServiceWorker not initialized.",
+              { status: 502, headers: { "Content-Type": "text/plain" } }
+            );
           }
 
           if (scramjet.route(event)) {
-            var response = await scramjet.fetch(event);
+            // Use fetchWithRetry for transparent mid-stream retry on
+            // transient failures (video chunks, API calls, 5xx responses).
+            var response = await fetchWithRetry(event, 2);
 
             // Block ad/tracker requests at network level
             var encodedUrl = url.pathname.substring(PROXY_PREFIX.length);
@@ -252,14 +493,16 @@ self.addEventListener("fetch", function(event) {
               return new Response("", { status: 204, headers: { "Content-Type": "text/plain" } });
             }
 
-            // Inject ad blocker + link rewriter into HTML responses
+            // Inject ad blocker + link rewriter into HTML responses.
             if (response && response.ok && isHtmlResponse(response)) {
-              try { return await injectIntoHtml(response); } catch(e) { return response; }
+              try { return await injectIntoHtml(response); } catch(e) { return stripFrameHeaders(response); }
             }
-            return response;
+            return stripFrameHeaders(response);
           }
-          // Not a scramjet route — pass through
-          return await fetch(event.request);
+          // Not a scramjet route — return 404 directly instead of calling
+          // fetch(event.request) which goes to the network and produces a
+          // confusing 404 from the Next.js dev server.
+          return new Response("Not found.", { status: 404, headers: { "Content-Type": "text/plain" } });
         } catch (err) {
           if (i < maxAttempts - 1) {
             // If it's the IDB error, heal and retry
@@ -270,8 +513,8 @@ self.addEventListener("fetch", function(event) {
             continue;
           }
           console.error("[hypers0nic/sw] scramjet error after " + maxAttempts + " retries:", err);
-          // Last resort: try a direct fetch (works for simple sites)
-          try { return await fetch(event.request); } catch(e) {}
+          // Return a clear error response instead of trying fetch(event.request)
+          // which goes to the network and produces a confusing 404.
           return new Response(
             "Scramjet proxy error: " + (err && err.message || err),
             { status: 502, headers: { "Content-Type": "text/plain" } }

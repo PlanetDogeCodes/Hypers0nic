@@ -68,7 +68,7 @@ export function FocusTimer() {
       if (intervalRef.current) clearInterval(intervalRef.current);
       intervalRef.current = null;
     };
-  }, [state]);
+  }, [state, duration, recordFocusSession]);
 
   const start = useCallback(() => {
     endTimeRef.current = Date.now() + duration * 1000;
