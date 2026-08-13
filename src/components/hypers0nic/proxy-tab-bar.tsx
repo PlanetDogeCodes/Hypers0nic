@@ -101,7 +101,9 @@ export function ProxyTabBar() {
 
   return (
     <div
-      className="sticky top-12 z-30 flex items-stretch border-b border-purple-500/20 bg-black font-mono text-white"
+  className="sticky top-12 z-40 flex items-stretch border-b border-purple-500/20 bg-black font-mono text-white"
+      // A subtle purple glow along the bottom edge to visually separate the
+      // tab bar from the proxied content below.
       style={{ boxShadow: "inset 0 -1px 0 0 rgba(168, 85, 247, 0.15)" }}
     >
       {/* Scrollable tab strip — horizontal scroll when tabs overflow. */}
