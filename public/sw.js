@@ -339,40 +339,13 @@ function healScramjetDB() {
 
 // Safe loadConfig wrapper — heals the DB if the transaction fails.
 // Races loadConfig() against a 5-second timeout to prevent hangs.
-// Also validates the loaded config has the expected prefix to detect
-// stale/corrupt configs (the "Cannot read properties of undefined
-// (reading 'prefix')" error).
 function safeLoadConfig() {
   var configPromise = scramjet.loadConfig();
   var timeoutPromise = new Promise(function(_, reject) {
     setTimeout(function() { reject(new Error("loadConfig timeout")); }, 5000);
   });
   return Promise.race([configPromise, timeoutPromise]).then(function() {
-    // Validate the config has the expected prefix. If not, the config is
-    // stale or corrupt — heal the DB and retry.
-    if (scramjet.config && scramjet.config.prefix === PROXY_PREFIX) {
-      configLoaded = true;
-    } else {
-      console.warn("[hypers0nic/sw] Stale config detected (prefix mismatch), healing DB");
-      configLoaded = false;
-      return healScramjetDB().then(function() {
-        return new Promise(function(resolve) { setTimeout(resolve, 500); });
-      }).then(function() {
-        var retryPromise = scramjet.loadConfig();
-        var retryTimeout = new Promise(function(_, reject) {
-          setTimeout(function() { reject(new Error("loadConfig retry timeout")); }, 5000);
-        });
-        return Promise.race([retryPromise, retryTimeout]).then(function() {
-          if (scramjet.config && scramjet.config.prefix === PROXY_PREFIX) {
-            configLoaded = true;
-          } else {
-            configLoaded = false;
-          }
-        }).catch(function() {
-          configLoaded = false;
-        });
-      });
-    }
+    configLoaded = true;
   }).catch(function(err) {
     if (err && (err.name === "NotFoundError" || (err.message && err.message.indexOf("object store") !== -1))) {
       return healScramjetDB().then(function() {
@@ -383,11 +356,7 @@ function safeLoadConfig() {
           setTimeout(function() { reject(new Error("loadConfig retry timeout")); }, 5000);
         });
         return Promise.race([retryPromise, retryTimeout]).then(function() {
-          if (scramjet.config && scramjet.config.prefix === PROXY_PREFIX) {
-            configLoaded = true;
-          } else {
-            configLoaded = false;
-          }
+          configLoaded = true;
         }).catch(function() {
           configLoaded = false;
         });

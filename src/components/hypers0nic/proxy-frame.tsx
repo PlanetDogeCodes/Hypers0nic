@@ -41,6 +41,15 @@ export function ProxyFrame() {
   const settledRef = useRef(true);
   const recordedRef = useRef(true);
   const safetyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Tracks which navNonce we've already started navigating for. Prevents
+  // double-navigation when the nav effect re-fires after the frame is created.
+  const lastNavNonceRef = useRef(0);
+  // Bumps when the ScramjetFrame is created (possibly after retries). The
+  // nav effect depends on this so it re-fires when the frame becomes
+  // available — this fixes the cold-start bug where the nav effect fired
+  // before the frame was created and returned early, leaving the user
+  // stuck on the loading screen until a manual refresh.
+  const [frameNonce, setFrameNonce] = useState(0);
 
   useEffect(() => {
     setMounted(true);
@@ -107,6 +116,12 @@ export function ProxyFrame() {
         frame = sj.createFrame(iframeRef.current);
         frameRef.current = frame;
         setupFrameListeners();
+        // Bump frameNonce so the nav effect re-fires. On a cold start,
+        // tryCreateFrame might fail initially and retry. The nav effect
+        // would have already fired and returned early (frameRef.current
+        // was null). This bump ensures the nav effect re-fires now that
+        // the frame exists, so the pending navigation executes.
+        setFrameNonce((n) => n + 1);
       } catch (err) {
         if (attempt < 3 && !cancelled) {
           retryTimer = setTimeout(() => tryCreateFrame(attempt + 1), 500 * (attempt + 1));
@@ -188,10 +203,17 @@ export function ProxyFrame() {
   // effect depended on omniboxValue it would re-fire frame.go() — causing the
   // "loads quickly, then unloads and reloads" bug. The URL to navigate to is
   // read from omniboxRef.current, which is kept in sync by the effect above.
+  //
+  // We depend on `frameNonce` so the effect re-fires when the ScramjetFrame
+  // is created (possibly after retries on a cold start). The lastNavNonceRef
+  // guard prevents double-navigation: each navNonce is navigated exactly once.
   useEffect(() => {
     if (!ready || !frameRef.current) return;
     const url = omniboxRef.current;
     if (!url) return;
+    // Prevent double-navigation: only navigate once per navNonce.
+    if (lastNavNonceRef.current === navNonce) return;
+    lastNavNonceRef.current = navNonce;
 
     beginNavigation();
 
@@ -207,7 +229,6 @@ export function ProxyFrame() {
           retried = true;
           const sj = getScramjet();
           sj.forceReconnect();
-          // Re-init and retry after a short delay.
           sj.init(useHypers0nic.getState().settings.wispUrl)
             .then(() => {
               try {
@@ -232,7 +253,7 @@ export function ProxyFrame() {
     };
 
     tryNavigate();
-  }, [navNonce, ready, beginNavigation]);
+  }, [navNonce, ready, frameNonce, beginNavigation]);
 
   // Listen for back/forward/reload commands dispatched by the store.
   // These reset the settled guard so the subsequent load event is not skipped.

@@ -121,14 +121,10 @@ let inAboutBlankPopup = false;
 // multiple calls share the same registration promise, preventing race
 // conditions where hydrate() and navigate() both try to register the SW.
 function ensureServiceWorker(): Promise<boolean> {
-  // Fast path: if the SW is already controlling, return immediately.
-  if (typeof navigator !== "undefined" && navigator.serviceWorker?.controller) {
-    swRegistered = true;
+  if (swRegistered && typeof navigator !== "undefined" && navigator.serviceWorker?.controller) {
     return Promise.resolve(true);
   }
-  // If registration is in progress, wait for it.
   if (swRegisterPromise) return swRegisterPromise;
-  // Start a new registration.
   swRegisterPromise = registerServiceWorker().then((ok) => {
     swRegistered = ok;
     swRegisterPromise = null;
@@ -139,10 +135,6 @@ function ensureServiceWorker(): Promise<boolean> {
 
 // Build a permalink for the target URL: /site/<domain><path>
 // Example: https://duckduckgo.com/?q=test → /site/duckduckgo.com/?q=test
-// Example: https://en.wikipedia.org/wiki/Proxy → /site/en.wikipedia.org/wiki/Proxy
-// The domain is extracted from the URL, and the path/query is preserved.
-// This makes the address bar reflect the site being visited while staying
-// on the Hypers0nic origin (so the SW stays in control).
 function buildPermalink(targetUrl: string): string | null {
   try {
     const u = new URL(targetUrl);
@@ -156,11 +148,9 @@ function buildPermalink(targetUrl: string): string | null {
 
 // Parse a permalink back into a full URL.
 // Example: /site/duckduckgo.com/?q=test → https://duckduckgo.com/?q=test
-// Example: /site/en.wikipedia.org/wiki/Proxy → https://en.wikipedia.org/wiki/Proxy
-// Returns null if the path is not a valid permalink.
 function parsePermalink(permalink: string): string | null {
   if (!permalink.startsWith("/site/")) return null;
-  const rest = permalink.substring(6); // Remove "/site/"
+  const rest = permalink.substring(6);
   const slashIdx = rest.indexOf("/");
   let domain: string;
   let path: string;
@@ -239,9 +229,13 @@ export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
         const targetUrl = decodeURIComponent(hash.substring(4));
         if (targetUrl) {
           inAboutBlankPopup = true;
+          // Clear the hash so it doesn't interfere with future navigations
+          // or get picked up on refresh.
           try {
             window.history.replaceState(null, "", window.location.pathname);
           } catch {}
+          // Defer navigation to allow the UI to mount first. The ProxyFrame
+          // component needs to be rendered before we can drive the iframe.
           setTimeout(() => {
             get().navigate(targetUrl);
           }, 800);
@@ -262,18 +256,13 @@ export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
     }
 
     // --- Browser back/forward handler for permalinks ---
-    // When the user presses the browser's back/forward buttons, we intercept
-    // the popstate event. If the state has a target URL, we navigate to it
-    // (without pushing a new history entry, since we're already there).
     if (typeof window !== "undefined") {
       window.addEventListener("popstate", (e) => {
         const state = e.state as { hypers0nic?: boolean; target?: string } | null;
         if (state?.hypers0nic && state.target) {
-          // Navigate to the target without pushing a new history entry.
           const target = state.target;
           set({ view: "proxy", omniboxValue: target, loading: true, navNonce: get().navNonce + 1 });
         } else if (!state?.hypers0nic) {
-          // No Hypers0nic state — go home.
           set({ view: "home", omniboxValue: "", loading: false });
         }
       });
@@ -391,8 +380,8 @@ export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
     // Update the browser URL to a permalink (/site/<domain>) so the address
     // bar reflects the site being visited. This makes the URL shareable and
     // bookmarkable. We use history.pushState so the page doesn't reload.
-    // The tab cloak (title + favicon) is maintained separately by the
-    // tab-cloak logic and is NOT affected by this URL change.
+    // The tab cloak (title + favicon) is maintained separately and is NOT
+    // affected by this URL change.
     if (typeof window !== "undefined" && !inAboutBlankPopup) {
       try {
         const permalink = buildPermalink(target);
@@ -423,9 +412,19 @@ export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
       return;
     }
     // Ensure the SW is registered and controlling BEFORE setting proxyReady.
-    const swOk = await ensureServiceWorker();
+    // Retry up to 3 times — on a cold start, the SW may need to download
+    // the Scramjet bundle (~500KB) which can take 20+ seconds on slow
+    // connections. Without retries, the first navigation after a cold
+    // start would fail.
+    let swOk = false;
+    for (let attempt = 0; attempt < 3 && !swOk; attempt++) {
+      if (attempt > 0) {
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+      swOk = await ensureServiceWorker();
+    }
     if (!swOk) {
-      console.error("[hypers0nic] service worker not controlling after registration");
+      console.error("[hypers0nic] service worker not controlling after 3 attempts");
       set({ loading: false });
       return;
     }

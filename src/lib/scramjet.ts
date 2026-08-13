@@ -383,14 +383,16 @@ export async function registerServiceWorker(): Promise<boolean> {
     return false;
   }
   try {
-    // Register with updateViaCache: "none" so the SW always fetches the
-    // latest version (Tinf0il pattern). This prevents stale SW bugs.
-    const reg = await navigator.serviceWorker.register("/sw.js", {
-      scope: "/",
-      type: "classic",
-      updateViaCache: "none",
-    });
-    await waitForController(reg, 10000);
+    const reg = await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+    await waitForController(reg, 30000);
+    // If the SW is registered and activated but not controlling the page
+    // (classic first-registration issue where clients.claim() has a delay),
+    // reload the page. On reload, the SW will control the page immediately.
+    if (!navigator.serviceWorker.controller && reg.active) {
+      console.log("[hypers0nic] SW activated but not controlling — reloading page");
+      window.location.reload();
+      return new Promise(() => {}); // Never resolves — page is reloading
+    }
     return !!navigator.serviceWorker.controller;
   } catch (err) {
     console.warn("[hypers0nic] service worker registration failed:", err);
@@ -402,31 +404,11 @@ async function waitForController(
   reg: ServiceWorkerRegistration,
   timeoutMs: number
 ): Promise<void> {
-  // If already controlling, return immediately.
   if (navigator.serviceWorker.controller) return;
-
-  // Tinf0il-style state machine: handle active, installing, and waiting
-  // states explicitly.
-  if (reg.active) {
-    // An active SW exists but isn't controlling yet — it will be after
-    // the next controllerchange event.
-  } else if (reg.installing) {
-    // Wait for the installing SW to activate.
-    await new Promise<void>((resolve) => {
-      if (!reg.installing) return resolve();
-      const handler = () => {
-        if (reg.installing?.state === "activated" || reg.installing?.state === "redundant") {
-          reg.installing.removeEventListener("statechange", handler);
-          resolve();
-        }
-      };
-      reg.installing.addEventListener("statechange", handler);
-    });
-  } else if (reg.waiting) {
-    // A waiting SW exists — tell it to skip waiting so it activates.
-    reg.waiting.postMessage("skipWaiting");
+  const sw = reg.active || reg.installing || reg.waiting;
+  if (sw) {
+    if (reg.waiting) reg.waiting.postMessage("skipWaiting");
   }
-
   await new Promise<void>((resolve) => {
     const onChange = () => {
       if (navigator.serviceWorker.controller) {
