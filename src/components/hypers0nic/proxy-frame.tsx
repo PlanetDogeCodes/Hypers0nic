@@ -35,7 +35,7 @@ export function ProxyFrame({ tabId }: { tabId: string }) {
   const proxyReady = useHypers0nic((s) => s.proxyReady);
   const recordVisit = useHypers0nic((s) => s.recordVisit);
   const topBarAlwaysVisible = useHypers0nic((s) => s.settings.preferences.topBarAlwaysVisible);
-const tabsCount = useHypers0nic((s) => s.tabs.length);
+  const tabsCount = useHypers0nic((s) => s.tabs.length);
   const setTabTitle = useHypers0nic((s) => s.setTabTitle);
   const updateTabUrl = useHypers0nic((s) => s.updateTabUrl);
   const setTabLoading = useHypers0nic((s) => s.setTabLoading);
@@ -429,16 +429,17 @@ const tabsCount = useHypers0nic((s) => s.tabs.length);
       setTabLoading(tabId, false);
     };
   }, [tabId, setTabLoading]);
-// Height: subtract header (3rem) and tab bar (~2rem when 2+ tabs) from
-// the viewport height. We use inline styles because Tailwind's JIT can't
-// detect dynamically constructed class names (h-[calc(100vh-Xrem)]).
-const headerHeight = mounted && topBarAlwaysVisible ? 3 : 0; // rem
-const tabBarHeight = mounted && topBarAlwaysVisible && tabsCount > 1 ? 2 : 0; // rem
-const totalOffsetRem = headerHeight + tabBarHeight;
-const frameHeight = totalOffsetRem > 0 ? `calc(100vh - ${totalOffsetRem}rem)` : "100vh";
 
-return (
-  <div className="flex flex-col" style={{ height: frameHeight }}>
+  // Height: subtract header (3rem) and tab bar (~2rem when 2+ tabs) from
+  // the viewport height. We use inline styles because Tailwind's JIT can't
+  // detect dynamically constructed class names (h-[calc(100vh-Xrem)]).
+  const headerHeight = mounted && topBarAlwaysVisible ? 3 : 0; // rem
+  const tabBarHeight = mounted && topBarAlwaysVisible && tabsCount > 1 ? 2 : 0; // rem
+  const totalOffsetRem = headerHeight + tabBarHeight;
+  const frameHeight = totalOffsetRem > 0 ? `calc(100vh - ${totalOffsetRem}rem)` : "100vh";
+
+  return (
+    <div className="flex flex-col" style={{ height: frameHeight }}>
       {/* Only render the toolbar for the active tab. This avoids duplicate
           #proxy-toolbar IDs (which would break the hover-reveal logic in
           ProxyToolbar that uses getElementById) and saves the work of

@@ -85,18 +85,14 @@ export function AppShell() {
   // through the store. (Destructuring keeps the call self-documenting;
   // the cost is at most 1 re-render per 30s tick, which is negligible.)
   useTransportHealth();
-// Calculate the top padding needed to clear the fixed header (3rem) and
-// the tab bar (2rem when visible in proxy view with 2+ tabs).
-const hasTabBar = view === "proxy" && tabs.length > 1;
-const topPadding = topBarAlwaysVisible ? (hasTabBar ? "3.25rem" : "3rem") : "0";
 
-return (
-  <div className="flex min-h-screen flex-col bg-background">
-    {/* SW update banner — rendered ABOVE the header so it temporarily
-        replaces it when a new version is available. Same height as the
-        header (h-12) so layout doesn't shift. Renders null when no
-        update is pending. */}
-    <SwUpdateBanner />
+  // Calculate the top padding needed to clear the fixed header (3rem) and
+  // the tab bar (2rem when visible in proxy view with 2+ tabs).
+  const hasTabBar = view === "proxy" && tabs.length > 1;
+  const topPadding = topBarAlwaysVisible ? (hasTabBar ? "3.25rem" : "3rem") : "0";
+
+  return (
+    <div className="flex min-h-screen flex-col bg-background">
       <SwUpdateBanner />
       <Header
         onOpenSettings={() => setSettingsOpen(true)}
@@ -112,15 +108,7 @@ return (
             <HomeView onOpenHistory={() => setHistoryOpen(true)} />
           ) : (
             <div className="flex flex-col">
-{/* Tab bar — shown only when there are 2+ tabs. The component
-    itself returns null for the single-tab case. */}
-<ProxyTabBar />
-{/* Render EVERY tab's ProxyFrame, but only display the active
-    one. Inactive tabs stay mounted (their iframes keep their
-    loaded state across tab switches — switching back is
-    instant). Using display:none (rather than unmounting) is
-    critical: unmounting would destroy the ScramjetFrame and
-    force a full reload on every switch. */}
+              <ProxyTabBar />
               {tabs.map((tab) => (
                 <div
                   key={tab.id}
