@@ -37,7 +37,6 @@ export const DEFAULT_SETTINGS: Hypers0nicSettings = {
     adBlockerEnabled: true,
     autoProxyLinks: true,
     useLibcurlTransport: false,
-    tinf0ilMode: false,
   },
   // Default wisp relay. Using wss://anura.pro as the public relay.
   wispUrl: "wss://anura.pro",

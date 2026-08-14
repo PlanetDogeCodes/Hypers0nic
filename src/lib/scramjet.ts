@@ -196,10 +196,13 @@ class ScramjetManager {
     const { BareMuxConnection } = await import("@mercuryworkshop/bare-mux");
 
     // Create a FRESH BareMuxConnection for each transport setup attempt.
+    // Reusing a connection that previously had a failed setTransport can
+    // cause the worker to be in a bad state.
     this.transportConn = new BareMuxConnection("/baremux/worker.js");
     const conn = this.transportConn;
 
-    // Build the full candidate list.
+    // Build the full candidate list: user's URL, all fallbacks, local relay,
+    // and ws:// variants of every wss:// URL.
     const localRelay = this.resolveLocalRelay();
     const baseCandidates = [wispUrl, ...FALLBACK_WISP_SERVERS, localRelay].filter(
       (v, i, a) => v && a.indexOf(v) === i
@@ -213,101 +216,62 @@ class ScramjetManager {
       }
     }
 
-    // Check if we should use libcurl transport (Tinf0il mode or user preference).
-    // libcurl-transport speaks wisp directly without BareMux/Epoxy, which is
-    // what Tinf0il uses. It's more efficient and handles network filters better.
-    const settings = typeof window !== "undefined" ? JSON.parse(localStorage.getItem("hypers0nic:settings:v1") || "{}") : {};
-    const useLibcurl = settings?.preferences?.useLibcurlTransport || settings?.preferences?.tinf0ilMode;
+    // Check if we should use libcurl transport. libcurl speaks wisp directly
+    // without BareMux/Epoxy — this is the same approach Tinf0il uses. It's
+    // more efficient and handles network filters better.
+    const settingsRaw = typeof window !== "undefined" ? localStorage.getItem("hypers0nic:settings:v1") : null;
+    const settings = settingsRaw ? JSON.parse(settingsRaw) : {};
+    const useLibcurl = settings?.preferences?.useLibcurlTransport;
 
     if (useLibcurl) {
       console.log("[hypers0nic] using libcurl transport (Tinf0il mode)");
       return this.setupLibcurlTransport(conn, candidates);
     }
 
-    // Default: epoxy transport with concurrent racing.
-    console.log("[hypers0nic] trying", candidates.length, "wisp relay candidates concurrently (epoxy)");
+    // CRITICAL FIX: Use a SINGLE BareMuxConnection and try candidates
+    // sequentially. Creating multiple BareMuxConnection instances causes
+    // SharedWorker conflicts — they all share the same underlying worker,
+    // and concurrent setTransport calls corrupt each other's state.
+    //
+    // We use a short 6-second timeout per candidate so the total worst-case
+    // time is 6s × N candidates. With 12 candidates, that's 72 seconds max,
+    // but in practice the first or second candidate usually connects in
+    // under 2 seconds.
+    console.log("[hypers0nic] trying", candidates.length, "wisp relay candidates sequentially (epoxy)");
 
-    // CONCURRENT RACING: Try a FEW candidates at a time (not all 11 at once,
-    // which can OOM the dev server). We try the first 4 concurrently, and if
-    // none succeed, try the next 4, etc. This balances speed with memory.
-    const BATCH_SIZE = 4;
-    for (let batchStart = 0; batchStart < candidates.length; batchStart += BATCH_SIZE) {
-      const batch = candidates.slice(batchStart, batchStart + BATCH_SIZE);
-      console.log(`[hypers0nic] trying batch ${Math.floor(batchStart / BATCH_SIZE) + 1}:`, batch.length, "candidates");
-
-      const batchPromises = batch.map((candidate) => {
-        return new Promise<string>(async (resolve, reject) => {
-          let candidateConn: any = null;
-          try {
-            candidateConn = new BareMuxConnection("/baremux/worker.js");
-            const transportPromise = candidateConn.setTransport("/epoxy/index.mjs", [{ wisp: candidate }]);
-            const timeoutPromise = new Promise<never>((_, reject) =>
-              setTimeout(() => reject(new Error(`timeout for ${candidate}`)), 8000)
-            );
-            await Promise.race([transportPromise, timeoutPromise]);
-            resolve(candidate);
-          } catch (err) {
-            reject(err);
-          }
-        });
-      });
-
-      // Also try on the main connection with the first candidate of this batch
-      const mainPromise = (async (): Promise<string> => {
-        for (const candidate of batch) {
-          try {
-            const transportPromise = conn.setTransport("/epoxy/index.mjs", [{ wisp: candidate }]);
-            const timeoutPromise = new Promise<never>((_, reject) =>
-              setTimeout(() => reject(new Error(`timeout`)), 8000)
-            );
-            await Promise.race([transportPromise, timeoutPromise]);
-            return candidate;
-          } catch { /* Try next */ }
-        }
-        throw new Error("batch failed");
-      })();
-
-      try {
-        const winner = await Promise.race([
-          mainPromise,
-          ...batchPromises.map((p) => p.catch(() => new Promise<string>(() => {}))),
-        ]);
-        if (winner) {
-          this.transportUrl = winner;
-          try {
-            const port = conn.getInnerPort?.();
-            if (!(port && typeof port === "object" && "postMessage" in port)) {
-              await conn.setTransport("/epoxy/index.mjs", [{ wisp: winner }]);
-            }
-          } catch {
-            await conn.setTransport("/epoxy/index.mjs", [{ wisp: winner }]);
-          }
-          console.log("[hypers0nic] transport connected via", winner);
-          return;
-        }
-      } catch {
-        // This batch failed, try the next batch
-      }
-    }
-
-    // Sequential fallback.
-    console.log("[hypers0nic] falling back to sequential connection...");
     let lastError: unknown;
     for (const candidate of candidates) {
       try {
-        const transportPromise = conn.setTransport("/epoxy/index.mjs", [{ wisp: candidate }]);
+        console.log("[hypers0nic] trying transport:", candidate);
+        // Create a FRESH connection for each attempt to avoid stale state.
+        this.transportConn = new BareMuxConnection("/baremux/worker.js");
+        const freshConn = this.transportConn;
+
+        const transportPromise = freshConn.setTransport("/epoxy/index.mjs", [
+          { wisp: candidate },
+        ]);
         const timeoutPromise = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error(`timeout for ${candidate}`)), 5000)
+          setTimeout(() => reject(new Error(`timeout for ${candidate}`)), 6000)
         );
         await Promise.race([transportPromise, timeoutPromise]);
         this.transportUrl = candidate;
-        console.log("[hypers0nic] transport connected via sequential", candidate);
+        console.log("[hypers0nic] transport connected via", candidate);
         return;
       } catch (err) {
-        console.warn(`[hypers0nic] sequential transport failed for ${candidate}:`, err);
+        console.warn(`[hypers0nic] transport failed for ${candidate}:`, err);
         lastError = err;
       }
     }
+
+    // If all epoxy candidates failed, try libcurl as a last resort.
+    console.log("[hypers0nic] all epoxy candidates failed, trying libcurl fallback...");
+    try {
+      this.transportConn = new BareMuxConnection("/baremux/worker.js");
+      return await this.setupLibcurlTransport(this.transportConn, candidates);
+    } catch (libcurlErr) {
+      console.warn("[hypers0nic] libcurl fallback also failed:", libcurlErr);
+    }
+
     throw new Error(
       `Could not establish a wisp transport after trying ${candidates.length} candidates: ${
         lastError instanceof Error ? lastError.message : String(lastError)
@@ -319,12 +283,11 @@ class ScramjetManager {
    * Setup transport using libcurl-transport (Tinf0il mode).
    * libcurl speaks wisp directly without BareMux/Epoxy, which is more
    * efficient and handles network filters better. This is the same approach
-   * Tinf0il uses.
+   * Tinf0il uses — libcurl mode IS Tinf0il mode.
    */
   private async setupLibcurlTransport(conn: any, candidates: string[]): Promise<void> {
     const { LibcurlClient } = await import("@mercuryworkshop/libcurl-transport");
 
-    // Try each candidate sequentially with libcurl.
     let lastError: unknown;
     for (const candidate of candidates) {
       try {

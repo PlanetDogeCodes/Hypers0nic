@@ -69,7 +69,6 @@ export interface Preferences {
   adBlockerEnabled: boolean;
   autoProxyLinks: boolean;
   useLibcurlTransport: boolean;
-  tinf0ilMode: boolean;
 }
 
 export interface TinfoilProfile {
