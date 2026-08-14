@@ -1,10 +1,11 @@
-import type { Hypers0nicSettings, HistoryEntry, Bookmark, CustomShortcut } from "./types";
+import type { Hypers0nicSettings, HistoryEntry, Bookmark, CustomShortcut, ProxyTab } from "./types";
 
 const SETTINGS_KEY = "hypers0nic:settings:v1";
 const HISTORY_KEY = "hypers0nic:history:v1";
 const BOOKMARKS_KEY = "hypers0nic:bookmarks:v1";
 const FOCUS_SESSIONS_KEY = "hypers0nic:focus-sessions:v1";
 const CUSTOM_SHORTCUTS_KEY = "hypers0nic:custom-shortcuts:v1";
+const TABS_KEY = "hypers0nic:tabs:v1";
 
 export const DEFAULT_SETTINGS: Hypers0nicSettings = {
   theme: "hypers0nic",
