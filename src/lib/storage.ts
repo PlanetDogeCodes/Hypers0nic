@@ -242,47 +242,6 @@ export function saveCustomShortcuts(shortcuts: CustomShortcut[]) {
   }
 }
 
-/**
- * Load persisted proxy tabs for session restore. Filters out entries that
- * are missing required fields (id / url) so corrupt localStorage can't
- * crash the app. Caps at 8 entries to match the in-app tab limit.
- */
-export function loadTabs(): ProxyTab[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = window.localStorage.getItem(TABS_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter(
-        (t: any) =>
-          t && typeof t.id === "string" && typeof t.url === "string"
-      )
-      .map((t: any) => ({
-        id: t.id,
-        url: t.url,
-        // Default title to the URL if missing — every tab needs a title
-        // for the tab bar to display something.
-        title: typeof t.title === "string" ? t.title : t.url,
-        navNonce: typeof t.navNonce === "number" ? t.navNonce : 0,
-      }))
-      .slice(0, 8) as ProxyTab[];
-  } catch {
-    return [];
-  }
-}
-
-export function saveTabs(tabs: ProxyTab[]) {
-  if (typeof window === "undefined") return;
-  try {
-    // Cap at 8 to match the in-app tab limit and keep localStorage tidy.
-    window.localStorage.setItem(TABS_KEY, JSON.stringify(tabs.slice(0, 8)));
-  } catch {
-    /* quota / privacy mode — fail quietly */
-  }
-}
-
 function deepMerge<T>(base: T, override: Partial<T>): T {
   if (override === null || override === undefined) return base;
   if (typeof base !== "object" || base === null) return override as T;
@@ -300,4 +259,34 @@ function deepMerge<T>(base: T, override: Partial<T>): T {
     }
   }
   return out as T;
+}
+
+export function loadTabs(): ProxyTab[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(TABS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((t: any) => t && typeof t.id === "string" && typeof t.url === "string")
+      .map((t: any) => ({
+        id: t.id,
+        url: t.url,
+        title: typeof t.title === "string" ? t.title : t.url,
+        navNonce: typeof t.navNonce === "number" ? t.navNonce : 0,
+      }))
+      .slice(0, 8) as ProxyTab[];
+  } catch {
+    return [];
+  }
+}
+
+export function saveTabs(tabs: ProxyTab[]) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(TABS_KEY, JSON.stringify(tabs.slice(0, 8)));
+  } catch {
+    /* ignore */
+  }
 }

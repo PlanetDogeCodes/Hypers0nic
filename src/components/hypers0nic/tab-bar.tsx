@@ -1,27 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { X, Plus, Loader2 } from "lucide-react";
 import { useHypers0nic } from "@/store/hypers0nic";
 import { cn } from "@/lib/utils";
+import { X, Plus, Loader2 } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
 
-/**
- * ProxyTabBar — a horizontal, scrollable strip of open proxy tabs.
- *
- * Rendered at the top of the proxy view (below the header / proxy toolbar).
- * Each tab shows a favicon (Google favicon service), a truncated title, and
- * a close button. Tabs can be reordered via HTML5 drag-and-drop. A "+"
- * button at the end goes home (where the user can open a new tab).
- *
- * The bar is hidden when there's only one tab — the single-tab case is
- * already covered by the proxy toolbar's omnibox, so showing a tab bar would
- * just waste vertical space.
- *
- * Visual style: terminal aesthetic — pure black background, white text,
- * purple accents, monospace font. This is intentional: it matches the
- * Hypers0nic brand and makes the tab bar visually distinct from the proxied
- * content below.
- */
 function faviconFor(url: string): string {
   try {
     const u = new URL(url);
@@ -41,7 +24,7 @@ function hostnameLabel(url: string): string {
   }
 }
 
-export function ProxyTabBar() {
+export function TabBar() {
   const tabs = useHypers0nic((s) => s.tabs);
   const activeTabId = useHypers0nic((s) => s.activeTabId);
   const loadingTabs = useHypers0nic((s) => s.loadingTabs);
@@ -49,31 +32,23 @@ export function ProxyTabBar() {
   const closeTab = useHypers0nic((s) => s.closeTab);
   const reorderTabs = useHypers0nic((s) => s.reorderTabs);
   const goHome = useHypers0nic((s) => s.goHome);
+  const view = useHypers0nic((s) => s.view);
 
-  // Drag state: index of the tab currently being dragged. -1 when not
-  // dragging. Used to apply a "ghost" style to the dragged tab.
-  const [dragIndex, setDragIndex] = useState<number>(-1);
-  // dragOverIndex: index of the tab the dragged tab is currently hovering
-  // over. Used to show a drop indicator.
-  const [dragOverIndex, setDragOverIndex] = useState<number>(-1);
+  const [dragIndex, setDragIndex] = useState(-1);
+  const [dragOverIndex, setDragOverIndex] = useState(-1);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // Reset drag state if the tabs array changes mid-drag (e.g. a tab is
-  // closed while another is being dragged).
   useEffect(() => {
     if (dragIndex >= tabs.length) setDragIndex(-1);
     if (dragOverIndex >= tabs.length) setDragOverIndex(-1);
   }, [tabs.length, dragIndex, dragOverIndex]);
 
-  // Hide the tab bar entirely when there's only one tab (or zero). The
-  // single-tab case is already covered by the proxy toolbar's omnibox, so
-  // showing a tab bar would just waste vertical space.
+  // Always show the tab bar when there are 2+ tabs, even on the home view.
   if (tabs.length <= 1) return null;
 
   const handleDragStart = (e: React.DragEvent<HTMLDivElement>, index: number) => {
     setDragIndex(index);
     try {
-      // Firefox requires setData to start the drag.
       e.dataTransfer.setData("text/plain", String(index));
       e.dataTransfer.effectAllowed = "move";
     } catch {}
@@ -101,12 +76,9 @@ export function ProxyTabBar() {
 
   return (
     <div
-      className="z-40 flex items-stretch border-b border-purple-500/20 bg-black font-mono text-white"
-      // A subtle purple glow along the bottom edge to visually separate the
-      // tab bar from the proxied content below.
+      className="sticky top-0 z-[60] flex items-stretch border-b border-purple-500/20 bg-black font-mono text-white"
       style={{ boxShadow: "inset 0 -1px 0 0 rgba(168, 85, 247, 0.15)" }}
     >
-      {/* Scrollable tab strip — horizontal scroll when tabs overflow. */}
       <div
         ref={scrollRef}
         className="flex flex-1 items-stretch overflow-x-auto overflow-y-hidden"
@@ -146,9 +118,7 @@ export function ProxyTabBar() {
               }}
               title={title}
               className={cn(
-                "group relative flex max-w-[200px] min-w-[120px] cursor-pointer items-center gap-2 border-r border-purple-500/10 px-3 py-2 text-xs transition-colors select-none",
-                // Active tab: bright white text + subtle purple underline.
-                // Inactive: muted white, brightens on hover.
+                "group relative flex max-w-[200px] min-w-[120px] cursor-pointer items-center gap-2 border-r border-purple-500/10 px-3 py-1.5 text-xs transition-colors select-none",
                 isActive
                   ? "bg-purple-500/10 text-white"
                   : "bg-black/60 text-white/60 hover:bg-white/5 hover:text-white/90",
@@ -156,52 +126,23 @@ export function ProxyTabBar() {
                 isDropTarget && "ring-1 ring-inset ring-purple-500/60"
               )}
             >
-              {/* Active tab indicator: a 2px purple bar along the top edge. */}
               {isActive && (
-                <span
-                  aria-hidden
-                  className="absolute left-0 right-0 top-0 h-0.5 bg-purple-500"
-                />
+                <span aria-hidden className="absolute left-0 right-0 top-0 h-0.5 bg-purple-500" />
               )}
-              {/* Drop indicator: a 2px purple bar along the left edge. */}
               {isDropTarget && (
-                <span
-                  aria-hidden
-                  className="absolute left-0 top-0 bottom-0 w-0.5 bg-purple-500"
-                />
+                <span aria-hidden className="absolute left-0 top-0 bottom-0 w-0.5 bg-purple-500" />
               )}
-
-              {/* Favicon OR loading spinner. While the tab is loading we
-                  show a spinner instead of the favicon so the user can
-                  see at a glance which tabs are still fetching. */}
               {isLoading ? (
                 <Loader2 className="size-3.5 shrink-0 animate-spin text-purple-400" />
               ) : fav ? (
-                <img
-                  src={fav}
-                  alt=""
-                  className="size-3.5 shrink-0 rounded-sm"
-                  // Google's favicon service returns a default globe icon
-                  // for unknown domains, so we don't need a fallback.
-                  referrerPolicy="no-referrer"
-                  draggable={false}
-                />
+                <img src={fav} alt="" className="size-3.5 shrink-0 rounded-sm" referrerPolicy="no-referrer" draggable={false} />
               ) : (
                 <span className="size-3.5 shrink-0 rounded-sm bg-white/20" aria-hidden />
               )}
-
-              {/* Tab title — truncated with ellipsis. */}
               <span className="flex-1 truncate">{title}</span>
-
-              {/* Close button — stops propagation so clicking it doesn't
-                  also switch to the tab. Only the active tab (or tabs the
-                  user is hovering) show the button to reduce clutter. */}
               <button
                 type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  closeTab(tab.id);
-                }}
+                onClick={(e) => { e.stopPropagation(); closeTab(tab.id); }}
                 aria-label={`Close ${title}`}
                 className={cn(
                   "inline-flex size-4 shrink-0 items-center justify-center rounded text-white/50 transition-colors hover:bg-purple-500/30 hover:text-white",
@@ -214,18 +155,12 @@ export function ProxyTabBar() {
           );
         })}
       </div>
-
-      {/* "+" button — goes home where the user can type a new URL (which
-          creates a new tab via navigate()). Styled to match the terminal
-          aesthetic. */}
       <button
         type="button"
         onClick={goHome}
         aria-label="New tab"
         title="New tab (home)"
-        className={cn(
-          "flex shrink-0 items-center gap-1.5 border-l border-purple-500/20 px-3 py-2 text-xs text-white/60 transition-colors hover:bg-purple-500/10 hover:text-white"
-        )}
+        className="flex shrink-0 items-center gap-1.5 border-l border-purple-500/20 px-3 py-1.5 text-xs text-white/60 transition-colors hover:bg-purple-500/10 hover:text-white"
       >
         <Plus className="size-3.5" />
         <span className="hidden sm:inline">new</span>

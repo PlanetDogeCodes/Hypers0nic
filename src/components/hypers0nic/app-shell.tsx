@@ -5,25 +5,22 @@ import { Header } from "./header";
 import { Footer } from "./footer";
 import { HomeView } from "./home-view";
 import { ProxyFrame } from "./proxy-frame";
-import { ProxyTabBar } from "./proxy-tab-bar";
+import { TabBar } from "./tab-bar";
 import { SettingsDialog } from "./settings-dialog";
 import { HistoryPanel } from "./history-panel";
 import { CommandPalette } from "./command-palette";
 import { AppsPanel } from "./apps-panel";
 import { Tinf0ilAuth } from "./tinf0il-auth";
 import { CookieManager } from "./cookie-manager";
-import { SwUpdateBanner } from "./sw-update-banner";
 import { useHypers0nic } from "@/store/hypers0nic";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { usePanicKey } from "@/hooks/use-panic-key";
 import { useTinfoilAutoSync } from "@/hooks/use-tinfoil-auto-sync";
-import { useTransportHealth } from "@/hooks/use-transport-health";
 import { applyTabCloak } from "@/lib/tab-cloak";
 
 export function AppShell() {
   const view = useHypers0nic((s) => s.view);
   const tabs = useHypers0nic((s) => s.tabs);
-  const activeTabId = useHypers0nic((s) => s.activeTabId);
   const hydrate = useHypers0nic((s) => s.hydrate);
   const tabCloak = useHypers0nic((s) => s.settings.tabCloak);
   const topBarAlwaysVisible = useHypers0nic((s) => s.settings.preferences.topBarAlwaysVisible);
@@ -64,12 +61,7 @@ export function AppShell() {
     onOpenSettings: () => setSettingsOpen(true),
     onOpenHistory: () => setHistoryOpen((v) => !v),
     onOpenPalette: () => setPaletteOpen(true),
-    // Ctrl+Shift+A → quick-open the apps panel (Task 5).
     onOpenApps: () => setAppsOpen(true),
-    // Ctrl+Shift+T → reopen the most recently closed tab (Task 5). Reads
-    // directly from the store via getState() to avoid subscribing this
-    // component to recentlyClosed (which would re-render AppShell on every
-    // tab close/open and cause needless child re-renders).
     onReopenClosedTab: () => {
       void useHypers0nic.getState().reopenClosedTab();
     },
@@ -77,60 +69,53 @@ export function AppShell() {
 
   usePanicKey();
   useTinfoilAutoSync();
-  // Transport health monitor (Task 4). Pings the wisp relay every 30s and
-  // writes transportQuality + transportLatency into the store, which the
-  // ProxyHUD reads to render its connection-quality dot. The hook also
-  // auto-force-reconnects when the transport has been dead for 2 ticks.
-  // We intentionally don't use the return value here — the values flow
-  // through the store. (Destructuring keeps the call self-documenting;
-  // the cost is at most 1 re-render per 30s tick, which is negligible.)
-  useTransportHealth();
+
+  // The tab bar sits ABOVE the header/toolbar. Both are position:fixed.
+  // When tabs are visible (2+), the tab bar takes ~2rem at the top.
+  // The header/toolbar sits below it at top:2rem.
+  // Content padding must account for both: 2rem (tabs) + 3rem (header) = 5rem.
+  // When tabs are hidden (0-1 tabs), just the header: 3rem.
+  // When the top bar is auto-hidden, content starts at 0 (or 2rem for tabs).
+  const hasTabs = tabs.length > 1;
+  const tabBarHeight = hasTabs ? 2 : 0; // rem
+  const headerHeight = topBarAlwaysVisible ? 3 : 0; // rem
+  const totalOffset = tabBarHeight + headerHeight; // rem
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
-      {/* SW update banner — rendered ABOVE the header so it temporarily
-          replaces it when a new version is available. Same height as the
-          header (h-12) so layout doesn't shift. Renders null when no
-          update is pending. */}
-      <SwUpdateBanner />
-      <Header
-        onOpenSettings={() => setSettingsOpen(true)}
-        onOpenHistory={() => setHistoryOpen(true)}
-        onOpenPalette={() => setPaletteOpen(true)}
-        onOpenApps={() => setAppsOpen(true)}
-        onOpenTinf0il={() => setTinf0ilOpen(true)}
-        onOpenCookies={() => setCookiesOpen(true)}
-      />
-      {/* When the top bar is always visible, push content down by its height (h-12 = 3rem). */}
-      <div className={topBarAlwaysVisible ? "pt-12" : ""}>
+      {/* Tab bar — always on top, above the header/toolbar. Rendered as a
+          fixed element so it stays visible during scroll. */}
+      {hasTabs && (
+        <div style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 60 }}>
+          <TabBar />
+        </div>
+      )}
+
+      {/* Header — when tabs are visible, push it down by the tab bar height.
+          When auto-hidden, the header still renders (it reveals on hover). */}
+      <div style={hasTabs ? { marginTop: `${tabBarHeight}rem` } : undefined}>
+        <Header
+          onOpenSettings={() => setSettingsOpen(true)}
+          onOpenHistory={() => setHistoryOpen(true)}
+          onOpenPalette={() => setPaletteOpen(true)}
+          onOpenApps={() => setAppsOpen(true)}
+          onOpenTinf0il={() => setTinf0ilOpen(true)}
+          onOpenCookies={() => setCookiesOpen(true)}
+        />
+      </div>
+
+      {/* Content — pushed down by the total offset (tabs + header). */}
+      <div style={{ paddingTop: `${totalOffset}rem` }}>
         <main className="flex min-h-[calc(100vh-3rem)] flex-col">
           {view === "home" ? (
             <HomeView onOpenHistory={() => setHistoryOpen(true)} />
           ) : (
-            <div className="flex flex-col">
-              {/* Tab bar — shown only when there are 2+ tabs. The component
-                  itself returns null for the single-tab case. */}
-              <ProxyTabBar />
-              {/* Render EVERY tab's ProxyFrame, but only display the active
-                  one. Inactive tabs stay mounted (their iframes keep their
-                  loaded state across tab switches — switching back is
-                  instant). Using display:none (rather than unmounting) is
-                  critical: unmounting would destroy the ScramjetFrame and
-                  force a full reload on every switch. */}
-              {tabs.map((tab) => (
-                <div
-                  key={tab.id}
-                  style={{ display: tab.id === activeTabId ? "block" : "none" }}
-                  aria-hidden={tab.id !== activeTabId}
-                >
-                  <ProxyFrame tabId={tab.id} />
-                </div>
-              ))}
-            </div>
+            <ProxyFrame />
           )}
         </main>
         {view === "home" && <Footer />}
       </div>
+
       <SettingsDialog
         open={settingsOpen}
         onOpenChange={setSettingsOpen}

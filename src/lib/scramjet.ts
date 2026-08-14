@@ -28,6 +28,8 @@ const SCRAMJET_FILES = {
 
 const FALLBACK_WISP_SERVERS = [
   "wss://wisp.mercurywork.shop/",
+  "wss://anura.pro",
+  "wss://wispmirror.mercurywork.shop/",
 ];
 
 export type ScramjetStatus = "idle" | "loading" | "ready" | "error";
@@ -168,13 +170,11 @@ class ScramjetManager {
 
   private async setupTransport(wispUrl: string): Promise<void> {
     // Reuse existing transport if it's already connected to the same URL.
-    // This prevents leaking BareMuxConnection workers on re-init.
     if (this.transportConn && this.transportUrl === wispUrl) {
-      // Health check: verify the transport is still alive.
       try {
         const port = this.transportConn.getInnerPort?.();
         if (port && typeof port === "object" && "postMessage" in port) {
-          return; // Transport is alive, reuse it.
+          return;
         }
       } catch {
         // Health check failed — fall through to reconnect.
@@ -182,7 +182,7 @@ class ScramjetManager {
       this.transportUrl = null;
     }
 
-    // Validate the wisp URL before attempting connection
+    // Validate the wisp URL
     if (!wispUrl || (!wispUrl.startsWith("ws://") && !wispUrl.startsWith("wss://"))) {
       wispUrl = FALLBACK_WISP_SERVERS[0];
     }
@@ -194,10 +194,24 @@ class ScramjetManager {
     }
     const conn = this.transportConn;
 
+    // Build candidate list: user's wisp URL first, then all fallbacks, then
+    // the local relay. Also try ws:// variants of wss:// URLs for networks
+    // that block wss:// but allow ws:// (rare but happens on some filters).
     const localRelay = this.resolveLocalRelay();
-    const candidates = [wispUrl, ...FALLBACK_WISP_SERVERS, localRelay].filter(
+    const baseCandidates = [wispUrl, ...FALLBACK_WISP_SERVERS, localRelay].filter(
       (v, i, a) => v && a.indexOf(v) === i
     );
+
+    // For each wss:// candidate, also add a ws:// variant (network filters
+    // sometimes block wss:// on port 443 but allow ws:// on port 80).
+    const candidates: string[] = [];
+    for (const c of baseCandidates) {
+      candidates.push(c);
+      if (c.startsWith("wss://")) {
+        const wsVariant = "ws://" + c.substring(6);
+        if (!candidates.includes(wsVariant)) candidates.push(wsVariant);
+      }
+    }
 
     let lastError: unknown;
     for (const candidate of candidates) {
@@ -205,14 +219,16 @@ class ScramjetManager {
         const transportPromise = conn.setTransport("/epoxy/index.mjs", [
           { wisp: candidate },
         ]);
+        // Shorter timeout (8s) so we try more candidates faster.
         const timeoutPromise = new Promise<never>((_, reject) =>
           setTimeout(
             () => reject(new Error(`transport timeout for ${candidate}`)),
-            15000
+            8000
           )
         );
         await Promise.race([transportPromise, timeoutPromise]);
         this.transportUrl = candidate;
+        console.log("[hypers0nic] transport connected via", candidate);
         return;
       } catch (err) {
         console.warn(`[hypers0nic] transport failed for ${candidate}:`, err);
