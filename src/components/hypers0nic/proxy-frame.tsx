@@ -305,7 +305,7 @@ export function ProxyFrame() {
   // is on, plus the tab bar (2rem) when 2+ tabs are open. Without this, the
   // iframe would extend under the header/toolbar and the bottom would be
   // clipped off-screen.
-  const hasTabBar = tabCount >= 2;
+  const hasTabBar = tabCount >= 1;
   const containerHeight = mounted && topBarAlwaysVisible
     ? hasTabBar
       ? "h-[calc(100vh-5rem)]"

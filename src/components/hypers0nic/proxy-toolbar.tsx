@@ -40,7 +40,7 @@ export function ProxyToolbar({
   // When 2+ proxy tabs are open, the TabBar is rendered above the toolbar.
   // Shift the toolbar down by 2rem (top-8) to make room.
   const tabCount = useHypers0nic((s) => s.tabs.length);
-  const hasTabBar = tabCount >= 2;
+  const hasTabBar = tabCount >= 1;
   const [visible, setVisible] = useState(topBarAlwaysVisible);
 
   useEffect(() => {

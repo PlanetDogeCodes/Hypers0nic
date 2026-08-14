@@ -57,9 +57,9 @@ export function AppShell() {
     }
   }, [tabCloak.enabled, tabCloak.preset, tabCloak.customTitle, tabCloak.customIcon]);
 
-  // The tab bar appears above the header when 2+ tabs are open. Both the
-  // header/toolbar and the page content need to be pushed down to make room.
-  const hasTabBar = tabCount >= 2;
+  // The tab bar appears above the header whenever there's at least 1 tab.
+  // Both the header/toolbar and the page content need to be pushed down.
+  const hasTabBar = tabCount >= 1;
 
   useKeyboardShortcuts({
     onOpenSettings: () => setSettingsOpen(true),

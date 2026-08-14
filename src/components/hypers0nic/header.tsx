@@ -39,7 +39,7 @@ export function Header({
   // When there are 2+ proxy tabs, the TabBar is rendered above the header.
   // We shift the header down by 2rem (top-8) to make room for it.
   const tabCount = useHypers0nic((s) => s.tabs.length);
-  const hasTabBar = tabCount >= 2;
+  const hasTabBar = tabCount >= 1;
   const [visible, setVisible] = useState(topBarAlwaysVisible);
 
   useEffect(() => {

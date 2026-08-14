@@ -50,8 +50,11 @@ export function TabBar() {
     [scramjet.status]
   );
 
-  // Don't render the tab bar unless there are 2+ tabs.
-  if (tabs.length < 2) return null;
+  // Always render the tab bar when there's at least 1 tab. Even with a
+  // single tab, the bar shows the current site and the "+" button to go home.
+  // When the last tab is closed, the store sends the user to the home page
+  // and the tab bar disappears (0 tabs).
+  if (tabs.length === 0) return null;
 
   const handleDragStart = (e: React.DragEvent, index: number) => {
     setDragIndex(index);
