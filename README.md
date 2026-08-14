@@ -1,6 +1,6 @@
 # Hypers0nic
 
-A Scramjet-based web proxy client with a terminal-inspired UI, built on Next.js 16.
+A blazing-fast Scramjet proxy built for easily browsing the modern web.
 
 ## What it does
 
@@ -129,3 +129,6 @@ The service worker intercepts all `/service/*` requests, decodes the target URL,
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE) for the full text.
+
+## AI Use Disclaimer
+Yes, this README and the Hypers0nic UI were generated with assistance from GLM-5.2 - Everything else is entirely human
