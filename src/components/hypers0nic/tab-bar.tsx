@@ -93,6 +93,26 @@ export function TabBar() {
     dragIndexRef.current = null;
   };
 
+  // Connection status — read from the scramjet snapshot in the store.
+  // Green = ready, yellow = loading, red = error, gray = idle.
+  const connStatus = scramjet.status;
+  const connDotClass =
+    connStatus === "ready"
+      ? "bg-emerald-500"
+      : connStatus === "loading"
+      ? "bg-amber-400"
+      : connStatus === "error"
+      ? "bg-red-500"
+      : "bg-muted-foreground/60";
+  const connTitle =
+    connStatus === "ready"
+      ? "Proxy connected"
+      : connStatus === "loading"
+      ? "Connecting…"
+      : connStatus === "error"
+      ? `Connection error${scramjet.error ? ": " + scramjet.error : ""}`
+      : "Proxy idle";
+
   return (
     <div
       className="fixed left-0 right-0 top-0 z-60 flex h-8 items-center gap-1 overflow-x-auto border-b border-border/30 bg-background/95 px-2 backdrop-blur-md"
@@ -129,7 +149,7 @@ export function TabBar() {
             }}
             onClick={() => switchTab(tab.id)}
             className={cn(
-              "group relative flex h-6 min-w-0 max-w-[14rem] shrink cursor-pointer items-center gap-1.5 rounded-md border px-2 text-xs transition-all",
+              "group relative flex h-6 min-w-0 max-w-[14rem] shrink cursor-pointer items-center gap-1.5 rounded-md border px-2 text-xs transition-all duration-150",
               "font-mono",
               isActive
                 ? "border-primary/60 bg-primary/10 text-primary"
@@ -182,6 +202,16 @@ export function TabBar() {
             >
               <X className="size-3" />
             </button>
+
+            {/* Loading progress bar — a thin purple line at the bottom of
+                the tab that animates from 0% to 100% width over 3 seconds,
+                then resets. Only shown while this tab is loading a page. */}
+            {isLoading && (
+              <span
+                className="tab-loading-bar pointer-events-none absolute bottom-0 left-0 h-0.5 bg-[#a855f7]"
+                aria-hidden="true"
+              />
+            )}
           </div>
         );
       })}
@@ -196,6 +226,20 @@ export function TabBar() {
       >
         <Plus className="size-3.5" />
       </button>
+
+      {/* Connection status indicator — a small dot next to the "+" button.
+          Green = ready, yellow = loading, red = error, gray = idle.
+          Title attribute carries the human-readable status text. */}
+      <span
+        className={cn(
+          "ml-auto size-2 shrink-0 rounded-full transition-colors",
+          connDotClass,
+          connStatus === "loading" && "animate-pulse"
+        )}
+        role="status"
+        aria-label={connTitle}
+        title={connTitle}
+      />
     </div>
   );
 }

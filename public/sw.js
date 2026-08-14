@@ -415,28 +415,32 @@ function fetchRuntimeAsset(request) {
 
 // Fetch with transparent mid-stream retry for transient failures.
 // Non-HTML resources (video chunks, API calls, scripts) that fail with a
-// network error or 5xx are retried up to `maxRetries` times with a short
-// delay. This dramatically improves reliability for streaming-heavy sites
-// like YouTube and Twitch, where individual chunk fetches can fail without
-// breaking the overall playback.
-function fetchWithRetry(event, maxRetries = 2) {
+// network error or 5xx are retried up to `maxRetries` times with an
+// exponential backoff (300ms, 600ms, 1200ms). This dramatically improves
+// reliability for streaming-heavy sites like YouTube and Twitch, where
+// individual chunk fetches can fail without breaking the overall playback.
+function fetchWithRetry(event, maxRetries = 3) {
+  // Exponential backoff: 300ms, 600ms, 1200ms, 2400ms, ...
+  var BACKOFF_DELAYS = [300, 600, 1200, 2400, 4800];
   var attempt = 0;
   function tryFetch() {
     return scramjet.fetch(event).then(function(response) {
-      // 502/503/504 from the target — retry once after a short delay.
+      // 502/503/504 from the target — retry with exponential backoff.
       // These often indicate a transient relay hiccup that resolves itself.
       if (response && (response.status === 502 || response.status === 503 || response.status === 504) && attempt < maxRetries) {
+        var delay = BACKOFF_DELAYS[attempt] || (BACKOFF_DELAYS[BACKOFF_DELAYS.length - 1] * 2);
         attempt++;
         return new Promise(function(resolve) {
-          setTimeout(function() { resolve(tryFetch()); }, 300 * attempt);
+          setTimeout(function() { resolve(tryFetch()); }, delay);
         });
       }
       return response;
     }).catch(function(err) {
       if (attempt < maxRetries) {
+        var delay = BACKOFF_DELAYS[attempt] || (BACKOFF_DELAYS[BACKOFF_DELAYS.length - 1] * 2);
         attempt++;
         return new Promise(function(resolve) {
-          setTimeout(function() { resolve(tryFetch()); }, 300 * attempt);
+          setTimeout(function() { resolve(tryFetch()); }, delay);
         });
       }
       throw err;
@@ -476,7 +480,16 @@ self.addEventListener("fetch", function(event) {
             await healScramjetDB();
           }
 
-          await safeLoadConfig();
+          // Config persistence — once we've successfully loaded the config
+          // (configLoaded === true) AND scramjet.config still has the correct
+          // prefix, SKIP the safeLoadConfig() IDB read on subsequent fetches.
+          // This saves ~50ms per fetch (no IDB round-trip) and prevents race
+          // conditions where multiple concurrent fetches all try to read the
+          // config simultaneously. Only re-read if configLoaded is false OR
+          // the config object is missing or has the wrong prefix.
+          if (!configLoaded || !scramjet || !scramjet.config || scramjet.config.prefix !== PROXY_PREFIX) {
+            await safeLoadConfig();
+          }
 
           if (!configLoaded) {
             if (i < maxAttempts - 1) {
@@ -541,7 +554,8 @@ self.addEventListener("fetch", function(event) {
           if (scramjet.route(event)) {
             // Use fetchWithRetry for transparent mid-stream retry on
             // transient failures (video chunks, API calls, 5xx responses).
-            var response = await fetchWithRetry(event, 2);
+            // Max 3 retries with exponential backoff (300ms, 600ms, 1200ms).
+            var response = await fetchWithRetry(event, 3);
 
             // Block ad/tracker requests at network level
             var encodedUrl = url.pathname.substring(PROXY_PREFIX.length);

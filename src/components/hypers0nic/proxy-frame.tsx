@@ -210,13 +210,28 @@ export function ProxyFrame() {
     // throws (dead transport, controller issue), we force-reconnect the
     // Scramjet manager, wait for re-init, and retry the navigation once.
     let retried = false;
-    const tryNavigate = () => {
+    const tryNavigate = async () => {
+      // Quick health check before navigation — verifies the transport is
+      // actually moving bytes (not just that the SharedWorker is alive).
+      // If the wisp relay has restarted since the last navigation, the
+      // WebSocket may be dead even though the worker is fine. Force-
+      // reconnecting here avoids a failed frame.go() mid-load.
+      const sj = getScramjet();
+      try {
+        const healthy = await sj.quickHealthCheck();
+        if (!healthy) {
+          console.warn("[hypers0nic] transport health check failed, force-reconnecting");
+          sj.forceReconnect();
+          await sj.init(useHypers0nic.getState().settings.wispUrl);
+        }
+      } catch (e) {
+        console.warn("[hypers0nic] pre-nav health check error:", e);
+      }
       try {
         frameRef.current.go(url);
       } catch (err) {
         if (!retried) {
           retried = true;
-          const sj = getScramjet();
           sj.forceReconnect();
           // Re-init and retry after a short delay.
           sj.init(useHypers0nic.getState().settings.wispUrl)

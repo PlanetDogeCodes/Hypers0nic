@@ -156,6 +156,23 @@ iframe {
   }
 }
 
+/*
+ * Tab loading progress bar — a thin purple line at the bottom of a tab that
+ * animates from 0% to 100% width over 3 seconds, then resets. Used by the
+ * TabBar to show which tabs are currently loading a page.
+ */
+@keyframes tab-loading-progress {
+  0% {
+    width: 0%;
+  }
+  100% {
+    width: 100%;
+  }
+}
+.tab-loading-bar {
+  animation: tab-loading-progress 3s linear infinite;
+}
+
 /* Hide the header/proxy toolbar by default; reveal on hover near top. */
 .hover-reveal {
   opacity: 0;

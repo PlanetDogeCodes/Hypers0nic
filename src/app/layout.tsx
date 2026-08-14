@@ -59,6 +59,13 @@ export default function RootLayout({
         <link rel="preload" href="/scramjet/scramjet.wasm.wasm" as="fetch" crossOrigin="anonymous" />
         <link rel="preload" href="/baremux/worker.js" as="script" />
         <link rel="preload" href="/epoxy/index.mjs" as="script" />
+        {/* modulepreload — tells the browser to start fetching AND parsing
+            these JS modules in parallel with the page render. They're fetched
+            with high priority and compiled off the main thread, so by the
+            time the user clicks a search result, the Scramjet bundle and
+            BareMux worker are already downloaded and ready to execute. */}
+        <link rel="modulepreload" href="/scramjet/scramjet.all.js" />
+        <link rel="modulepreload" href="/baremux/worker.js" />
         {children}
         <Toaster />
         <SonnerToaster

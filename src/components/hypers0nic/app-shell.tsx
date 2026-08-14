@@ -24,6 +24,7 @@ export function AppShell() {
   const tabCloak = useHypers0nic((s) => s.settings.tabCloak);
   const topBarAlwaysVisible = useHypers0nic((s) => s.settings.preferences.topBarAlwaysVisible);
   const tabCount = useHypers0nic((s) => s.tabs.length);
+  const activeTabId = useHypers0nic((s) => s.activeTabId);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -92,7 +93,12 @@ export function AppShell() {
           {view === "home" ? (
             <HomeView onOpenHistory={() => setHistoryOpen(true)} />
           ) : (
-            <ProxyFrame />
+            // transition-opacity duration-200 — fades the proxy frame in when
+            // a tab is clicked/switched, giving a smooth visual handoff
+            // instead of an abrupt iframe swap.
+            <div key={activeTabId ?? "home"} className="transition-opacity duration-200">
+              <ProxyFrame />
+            </div>
           )}
         </main>
         {view === "home" && <Footer />}
