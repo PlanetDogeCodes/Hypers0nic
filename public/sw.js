@@ -339,13 +339,39 @@ function healScramjetDB() {
 
 // Safe loadConfig wrapper — heals the DB if the transaction fails.
 // Races loadConfig() against a 5-second timeout to prevent hangs.
+// Also validates that the loaded config has a prefix property — if not,
+// the config is stale/corrupt and we heal the DB and retry.
 function safeLoadConfig() {
   var configPromise = scramjet.loadConfig();
   var timeoutPromise = new Promise(function(_, reject) {
     setTimeout(function() { reject(new Error("loadConfig timeout")); }, 5000);
   });
   return Promise.race([configPromise, timeoutPromise]).then(function() {
-    configLoaded = true;
+    // Validate the config has a prefix — this catches stale/corrupt configs
+    // that cause the "Cannot read properties of undefined (reading 'prefix')" error.
+    if (scramjet.config && scramjet.config.prefix === PROXY_PREFIX) {
+      configLoaded = true;
+    } else {
+      console.warn("[hypers0nic/sw] Stale config detected (prefix mismatch or missing), healing DB");
+      configLoaded = false;
+      return healScramjetDB().then(function() {
+        return new Promise(function(resolve) { setTimeout(resolve, 500); });
+      }).then(function() {
+        var retryPromise = scramjet.loadConfig();
+        var retryTimeout = new Promise(function(_, reject) {
+          setTimeout(function() { reject(new Error("loadConfig retry timeout")); }, 5000);
+        });
+        return Promise.race([retryPromise, retryTimeout]).then(function() {
+          if (scramjet.config && scramjet.config.prefix === PROXY_PREFIX) {
+            configLoaded = true;
+          } else {
+            configLoaded = false;
+          }
+        }).catch(function() {
+          configLoaded = false;
+        });
+      });
+    }
   }).catch(function(err) {
     if (err && (err.name === "NotFoundError" || (err.message && err.message.indexOf("object store") !== -1))) {
       return healScramjetDB().then(function() {
@@ -356,7 +382,11 @@ function safeLoadConfig() {
           setTimeout(function() { reject(new Error("loadConfig retry timeout")); }, 5000);
         });
         return Promise.race([retryPromise, retryTimeout]).then(function() {
-          configLoaded = true;
+          if (scramjet.config && scramjet.config.prefix === PROXY_PREFIX) {
+            configLoaded = true;
+          } else {
+            configLoaded = false;
+          }
         }).catch(function() {
           configLoaded = false;
         });
@@ -479,6 +509,42 @@ self.addEventListener("fetch", function(event) {
               { status: 502, headers: { "Content-Type": "text/plain" } }
             );
           }
+
+          // CRITICAL: Check that scramjet.config is loaded before routing.
+          // The "Cannot read properties of undefined (reading 'prefix')" error
+          // occurs when scramjet.config is undefined — loadConfig() either
+          // wasn't called or failed silently. Force a loadConfig() call here.
+          if (!scramjet.config) {
+            console.log("[hypers0nic/sw] scramjet.config is undefined, calling loadConfig()...");
+            try {
+              await scramjet.loadConfig();
+            } catch (configErr) {
+              console.warn("[hypers0nic/sw] loadConfig() failed:", configErr);
+              // Try healing the DB
+              await healScramjetDB();
+              await new Promise(function(r) { setTimeout(r, 500); });
+              try {
+                await scramjet.loadConfig();
+              } catch (retryErr) {
+                console.warn("[hypers0nic/sw] loadConfig() retry failed:", retryErr);
+              }
+            }
+          }
+
+          // Double-check config is loaded now
+          if (!scramjet.config || !scramjet.config.prefix) {
+            if (i < maxAttempts - 1) {
+              console.warn("[hypers0nic/sw] config still not loaded, retrying...");
+              await new Promise(function(r) { setTimeout(r, delays[i] || 2000); });
+              continue;
+            }
+            return new Response(
+              "Proxy not ready: config not loaded (no prefix).",
+              { status: 502, headers: { "Content-Type": "text/plain" } }
+            );
+          }
+
+          configLoaded = true;
 
           if (scramjet.route(event)) {
             // Use fetchWithRetry for transparent mid-stream retry on
