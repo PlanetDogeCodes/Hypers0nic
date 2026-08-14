@@ -26,10 +26,16 @@ const SCRAMJET_FILES = {
   sync: "/scramjet/scramjet.sync.js",
 };
 
+// Comprehensive list of public wisp relays. We try them ALL concurrently
+// and use whichever connects first. Netsweeper and similar filters block
+// known proxy domains by SNI/DNS inspection — having many mirrors increases
+// the chance that at least one isn't in the blocklist.
 const FALLBACK_WISP_SERVERS = [
   "wss://wisp.mercurywork.shop/",
   "wss://anura.pro",
   "wss://wispmirror.mercurywork.shop/",
+  "wss://wisp.4everland.app/",
+  "wss://wisp.fr/".replace("wisp.fr", "wisp.metaldev.org"),
 ];
 
 export type ScramjetStatus = "idle" | "loading" | "ready" | "error";
@@ -189,21 +195,20 @@ class ScramjetManager {
 
     const { BareMuxConnection } = await import("@mercuryworkshop/bare-mux");
 
-    if (!this.transportConn) {
-      this.transportConn = new BareMuxConnection("/baremux/worker.js");
-    }
+    // Create a FRESH BareMuxConnection for each transport setup attempt.
+    // Reusing a connection that previously had a failed setTransport can
+    // cause the worker to be in a bad state.
+    this.transportConn = new BareMuxConnection("/baremux/worker.js");
     const conn = this.transportConn;
 
-    // Build candidate list: user's wisp URL first, then all fallbacks, then
-    // the local relay. Also try ws:// variants of wss:// URLs for networks
-    // that block wss:// but allow ws:// (rare but happens on some filters).
+    // Build the full candidate list: user's URL, all fallbacks, local relay,
+    // and ws:// variants of every wss:// URL (some filters block wss:// on
+    // port 443 but allow ws:// on port 80).
     const localRelay = this.resolveLocalRelay();
     const baseCandidates = [wispUrl, ...FALLBACK_WISP_SERVERS, localRelay].filter(
       (v, i, a) => v && a.indexOf(v) === i
     );
 
-    // For each wss:// candidate, also add a ws:// variant (network filters
-    // sometimes block wss:// on port 443 but allow ws:// on port 80).
     const candidates: string[] = [];
     for (const c of baseCandidates) {
       candidates.push(c);
@@ -213,30 +218,116 @@ class ScramjetManager {
       }
     }
 
+    console.log("[hypers0nic] trying", candidates.length, "wisp relay candidates concurrently");
+
+    // CONCURRENT RACING: Try ALL candidates at the same time. The first one
+    // that successfully connects wins. This is dramatically faster than
+    // sequential trying (8s × N candidates → 8s total) and ensures we find
+    // a working relay even if most are blocked by Netsweeper.
+    //
+    // Each candidate gets its own 8-second timeout. We use Promise.race
+    // on an array of "first to connect" promises.
+    const connectPromises = candidates.map((candidate) => {
+      return new Promise<string>(async (resolve, reject) => {
+        // Each candidate needs its own BareMuxConnection because
+        // setTransport is stateful — calling it on the same connection
+        // with different URLs can interfere.
+        let candidateConn: any = null;
+        try {
+          candidateConn = new BareMuxConnection("/baremux/worker.js");
+          const transportPromise = candidateConn.setTransport("/epoxy/index.mjs", [
+            { wisp: candidate },
+          ]);
+          const timeoutPromise = new Promise<never>((_, reject) =>
+            setTimeout(
+              () => reject(new Error(`timeout for ${candidate}`)),
+              8000
+            )
+          );
+          await Promise.race([transportPromise, timeoutPromise]);
+          // Success! This candidate connected. Return it.
+          resolve(candidate);
+        } catch (err) {
+          reject(err);
+        }
+      });
+    });
+
+    // Also try the MAIN connection (shared) concurrently — if one of the
+    // candidate connections wins, we'll copy its URL to the main connection.
+    const mainConnectPromise = (async (): Promise<string> => {
+      for (const candidate of candidates) {
+        try {
+          const transportPromise = conn.setTransport("/epoxy/index.mjs", [
+            { wisp: candidate },
+          ]);
+          const timeoutPromise = new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`timeout`)), 8000)
+          );
+          await Promise.race([transportPromise, timeoutPromise]);
+          return candidate;
+        } catch {
+          // Try next
+        }
+      }
+      throw new Error("all main connection candidates failed");
+    })();
+
+    // Race the main connection against all candidate connections.
+    // The first one to succeed wins.
+    try {
+      const winner = await Promise.race([
+        mainConnectPromise,
+        ...connectPromises.map((p) =>
+          p.catch(() => new Promise<string>(() => {})) // Don't reject on failure
+        ),
+      ]);
+
+      // If a candidate connection won (not the main), re-setup the main
+      // connection with the winning URL.
+      if (winner) {
+        this.transportUrl = winner;
+        // Check if the main connection already connected to this URL
+        try {
+          const port = conn.getInnerPort?.();
+          if (!(port && typeof port === "object" && "postMessage" in port)) {
+            // Main connection didn't win — re-setup with the winning URL
+            await conn.setTransport("/epoxy/index.mjs", [{ wisp: winner }]);
+          }
+        } catch {
+          await conn.setTransport("/epoxy/index.mjs", [{ wisp: winner }]);
+        }
+        console.log("[hypers0nic] transport connected via", winner);
+        return;
+      }
+    } catch (err) {
+      console.warn("[hypers0nic] all concurrent connections failed:", err);
+    }
+
+    // Last resort: try each candidate sequentially on the main connection
+    // with a very short timeout (3s). This handles the edge case where
+    // concurrent connections all failed due to resource limits.
+    console.log("[hypers0nic] falling back to sequential connection...");
     let lastError: unknown;
     for (const candidate of candidates) {
       try {
         const transportPromise = conn.setTransport("/epoxy/index.mjs", [
           { wisp: candidate },
         ]);
-        // Shorter timeout (8s) so we try more candidates faster.
         const timeoutPromise = new Promise<never>((_, reject) =>
-          setTimeout(
-            () => reject(new Error(`transport timeout for ${candidate}`)),
-            8000
-          )
+          setTimeout(() => reject(new Error(`timeout for ${candidate}`)), 5000)
         );
         await Promise.race([transportPromise, timeoutPromise]);
         this.transportUrl = candidate;
-        console.log("[hypers0nic] transport connected via", candidate);
+        console.log("[hypers0nic] transport connected via sequential", candidate);
         return;
       } catch (err) {
-        console.warn(`[hypers0nic] transport failed for ${candidate}:`, err);
+        console.warn(`[hypers0nic] sequential transport failed for ${candidate}:`, err);
         lastError = err;
       }
     }
     throw new Error(
-      `Could not establish a wisp transport: ${
+      `Could not establish a wisp transport after trying ${candidates.length} candidates: ${
         lastError instanceof Error ? lastError.message : String(lastError)
       }`
     );
