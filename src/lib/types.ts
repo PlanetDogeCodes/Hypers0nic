@@ -68,7 +68,6 @@ export interface Preferences {
   panicUrl: string;
   adBlockerEnabled: boolean;
   autoProxyLinks: boolean;
-  useLibcurlTransport: boolean;
 }
 
 export interface TinfoilProfile {
@@ -105,14 +104,6 @@ export interface Bookmark {
   url: string;
   title: string;
   addedAt: number;
-  folder?: string;
-}
-
-export interface ProxyTab {
-  id: string;
-  url: string;
-  title: string;
-  navNonce: number;
 }
 
 export interface CustomShortcut {

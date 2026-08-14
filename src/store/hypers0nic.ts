@@ -6,7 +6,6 @@ import type {
   HistoryEntry,
   Bookmark,
   CustomShortcut,
-  ProxyTab,
   View,
   ThemeId,
   TabCloakConfig,
@@ -27,8 +26,6 @@ import {
   computeStreak,
   loadCustomShortcuts,
   saveCustomShortcuts,
-  loadTabs,
-  saveTabs,
   type FocusSessionRecord,
 } from "@/lib/storage";
 import { applyTheme } from "@/lib/themes";
@@ -83,12 +80,6 @@ interface Hypers0nicStore {
   // --- scramjet ---
   scramjet: ScramjetStateSnapshot;
 
-  // --- proxy tabs ---
-  tabs: ProxyTab[];
-  activeTabId: string | null;
-  loadingTabs: Record<string, boolean>;
-  recentlyClosedTabs: { id: string; url: string; title: string }[];
-
   // --- actions ---
   hydrate: () => void;
   navigate: (input: string) => Promise<void>;
@@ -113,14 +104,6 @@ interface Hypers0nicStore {
   recordFocusSession: (durationMinutes: number) => void;
   addCustomShortcut: (shortcut: Omit<CustomShortcut, "id" | "addedAt">) => void;
   removeCustomShortcut: (id: string) => void;
-  // tab actions
-  closeTab: (id: string) => void;
-  switchTab: (id: string) => void;
-  reorderTabs: (fromIndex: number, toIndex: number) => void;
-  setTabTitle: (id: string, title: string) => void;
-  updateTabUrl: (id: string, url: string) => void;
-  setTabLoading: (id: string, loading: boolean) => void;
-  reopenClosedTab: () => void;
 }
 
 let swRegistered = false;
@@ -166,10 +149,6 @@ export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
   todayFocusMinutes: 0,
   focusStreak: 0,
   scramjet: { status: "idle" },
-  tabs: [],
-  activeTabId: null,
-  loadingTabs: {},
-  recentlyClosedTabs: [],
 
   hydrate: () => {
     if (get().hydrated) return;
@@ -178,15 +157,12 @@ export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
     const bookmarks = loadBookmarks();
     const focusSessions = loadFocusSessions();
     const customShortcuts = loadCustomShortcuts();
-    const savedTabs = loadTabs();
     set({
       settings,
       history,
       bookmarks,
       customShortcuts,
       focusSessions,
-      tabs: savedTabs,
-      activeTabId: savedTabs.length > 0 ? savedTabs[0].id : null,
       todaySessionCount: countTodaySessions(focusSessions),
       todayFocusMinutes: minutesToday(focusSessions),
       focusStreak: computeStreak(focusSessions),
@@ -342,74 +318,35 @@ export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
       return;
     }
 
-    // Create a new tab or update the active tab's URL.
-    const state = get();
-    const tabId = `tab-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    let newTabs: ProxyTab[];
+    set({ view: "proxy", omniboxValue: target, loading: true, navNonce: get().navNonce + 1 });
 
-    if (state.activeTabId && state.view === "proxy") {
-      // Update the active tab's URL and bump its navNonce.
-      newTabs = state.tabs.map((t) =>
-        t.id === state.activeTabId
-          ? { ...t, url: target, navNonce: t.navNonce + 1 }
-          : t
-      );
-    } else {
-      // Create a new tab (max 8).
-      if (state.tabs.length >= 8) {
-        // Close the oldest tab to make room.
-        newTabs = [...state.tabs.slice(1), { id: tabId, url: target, title: target, navNonce: 1 }];
-      } else {
-        newTabs = [...state.tabs, { id: tabId, url: target, title: target, navNonce: 1 }];
-      }
-    }
-
-    const activeId = state.activeTabId && state.view === "proxy" ? state.activeTabId : newTabs[newTabs.length - 1].id;
-    set({
-      view: "proxy",
-      omniboxValue: target,
-      loading: true,
-      navNonce: get().navNonce + 1,
-      tabs: newTabs,
-      activeTabId: activeId,
-    });
-    saveTabs(newTabs);
-
-    // CRITICAL: Ensure the SW is registered and controlling BEFORE initializing
-    // Scramjet. The Scramjet controller posts messages to the SW ("releaseDB"
-    // and "controllerReady"), which requires the SW to be controlling first.
-    // If we init Scramjet before the SW is ready, those messages are lost and
-    // the proxy silently fails.
-    const swOk = await ensureServiceWorker();
-    if (!swOk) {
-      console.error("[hypers0nic] service worker not controlling — navigation aborted");
-      set({ loading: false });
-      return;
-    }
-
-    // Now that the SW is controlling, boot Scramjet with aggressive retry.
+    // Boot scramjet with retry. The promise is memoised inside the manager
+    // so subsequent navigations are instant. If init fails, we force-reconnect
+    // and retry once before giving up — handles dropped transports.
     const sj = getScramjet();
     const tryInit = async () => {
-      let lastErr: unknown;
-      for (let attempt = 0; attempt < 3; attempt++) {
-        try {
-          if (attempt > 0) {
-            sj.forceReconnect();
-            await new Promise((r) => setTimeout(r, 1000));
-          }
-          await sj.init(settings.wispUrl);
-          return;
-        } catch (err) {
-          lastErr = err;
-          console.error(`[hypers0nic] scramjet init attempt ${attempt + 1} failed:`, err);
-        }
+      try {
+        await sj.init(settings.wispUrl);
+      } catch (err) {
+        console.error("[hypers0nic] scramjet init failed, retrying:", err);
+        sj.forceReconnect();
+        await sj.init(settings.wispUrl);
       }
-      throw lastErr;
     };
     try {
       await tryInit();
     } catch (err) {
-      console.error("[hypers0nic] scramjet init failed after 3 attempts:", err);
+      console.error("[hypers0nic] scramjet init failed on retry:", err);
+      set({ loading: false });
+      return;
+    }
+    // Ensure the SW is registered and controlling BEFORE setting proxyReady.
+    // This is the critical fix for the 40% failure rate: previously, the SW
+    // flag was set to true before registration completed, so /service/
+    // requests would 404. Now we await and verify.
+    const swOk = await ensureServiceWorker();
+    if (!swOk) {
+      console.error("[hypers0nic] service worker not controlling after registration");
       set({ loading: false });
       return;
     }
@@ -595,99 +532,5 @@ export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
     const next = get().customShortcuts.filter((s) => s.id !== id);
     set({ customShortcuts: next });
     saveCustomShortcuts(next);
-  },
-
-  closeTab: (id) => {
-    const { tabs, activeTabId, recentlyClosedTabs } = get();
-    const tab = tabs.find((t) => t.id === id);
-    if (!tab) return;
-    const newTabs = tabs.filter((t) => t.id !== id);
-    const newClosed = [{ id: tab.id, url: tab.url, title: tab.title }, ...recentlyClosedTabs].slice(0, 20);
-    // Switch to the adjacent tab, or go home if no tabs left.
-    const closedIndex = tabs.findIndex((t) => t.id === id);
-    let newActiveId = activeTabId;
-    let newView = get().view;
-    if (activeTabId === id) {
-      if (newTabs.length > 0) {
-        newActiveId = newTabs[Math.min(closedIndex, newTabs.length - 1)].id;
-        const newActive = newTabs.find((t) => t.id === newActiveId);
-        if (newActive) {
-          set({ omniboxValue: newActive.url });
-        }
-      } else {
-        newActiveId = null;
-        newView = "home";
-        set({ omniboxValue: "" });
-      }
-    }
-    const newLoadingTabs = { ...get().loadingTabs };
-    delete newLoadingTabs[id];
-    set({ tabs: newTabs, activeTabId: newActiveId, recentlyClosedTabs: newClosed, loadingTabs: newLoadingTabs, view: newView });
-    saveTabs(newTabs);
-  },
-
-  switchTab: (id) => {
-    const { tabs } = get();
-    const tab = tabs.find((t) => t.id === id);
-    if (!tab) return;
-    set({ activeTabId: id, omniboxValue: tab.url, view: "proxy" });
-    saveTabs(tabs);
-  },
-
-  reorderTabs: (fromIndex, toIndex) => {
-    const { tabs } = get();
-    if (fromIndex < 0 || fromIndex >= tabs.length || toIndex < 0 || toIndex >= tabs.length) return;
-    const newTabs = [...tabs];
-    const [moved] = newTabs.splice(fromIndex, 1);
-    newTabs.splice(toIndex, 0, moved);
-    set({ tabs: newTabs });
-    saveTabs(newTabs);
-  },
-
-  setTabTitle: (id, title) => {
-    const { tabs } = get();
-    const newTabs = tabs.map((t) => (t.id === id ? { ...t, title } : t));
-    set({ tabs: newTabs });
-    saveTabs(newTabs);
-  },
-
-  updateTabUrl: (id, url) => {
-    const { tabs } = get();
-    const newTabs = tabs.map((t) => (t.id === id ? { ...t, url } : t));
-    set({ tabs: newTabs, omniboxValue: url });
-    saveTabs(newTabs);
-  },
-
-  setTabLoading: (id, loading) => {
-    const newLoadingTabs = { ...get().loadingTabs };
-    if (loading) {
-      newLoadingTabs[id] = true;
-    } else {
-      delete newLoadingTabs[id];
-    }
-    set({ loadingTabs: newLoadingTabs });
-  },
-
-  reopenClosedTab: () => {
-    const { recentlyClosedTabs, tabs } = get();
-    if (recentlyClosedTabs.length === 0) return;
-    const [closed, ...rest] = recentlyClosedTabs;
-    const newTab: ProxyTab = {
-      id: `tab-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      url: closed.url,
-      title: closed.title || closed.url,
-      navNonce: 1,
-    };
-    const newTabs = tabs.length >= 8 ? [...tabs.slice(1), newTab] : [...tabs, newTab];
-    set({
-      tabs: newTabs,
-      activeTabId: newTab.id,
-      recentlyClosedTabs: rest,
-      view: "proxy",
-      omniboxValue: closed.url,
-    });
-    saveTabs(newTabs);
-    // Trigger navigation
-    setTimeout(() => get().navigate(closed.url), 100);
   },
 }));

@@ -37,8 +37,6 @@ export function AdvancedPanel() {
   const wispUrl = useHypers0nic((s) => s.settings.wispUrl);
   const setWispUrl = useHypers0nic((s) => s.setWispUrl);
   const scramjet = useHypers0nic((s) => s.scramjet);
-  const useLibcurlTransport = useHypers0nic((s) => s.settings.preferences.useLibcurlTransport);
-  const setPreferences = useHypers0nic((s) => s.setPreferences);
 
   const [draft, setDraft] = useState(wispUrl);
   const [testing, setTesting] = useState(false);
@@ -184,51 +182,6 @@ export function AdvancedPanel() {
         <Button variant="ghost" size="sm" onClick={handleReset} className="mt-1 h-7 text-xs">
           Reset to local relay
         </Button>
-      </div>
-
-      {/* Transport mode */}
-      <div className="space-y-3">
-        <h3 className="text-sm font-semibold text-foreground">Transport mode</h3>
-        <p className="text-xs text-muted-foreground">
-          Choose how Scramjet connects to the wisp relay. Epoxy (default) is
-          the standard transport. libcurl (Tinf0il mode) uses the exact same
-          transport as Tinf0il — it's more efficient and handles network
-          filters better.
-        </p>
-        <div className="space-y-2">
-          <label className="flex items-center gap-3 rounded-lg border border-border/40 p-3 cursor-pointer hover:bg-muted/30">
-            <input
-              type="radio"
-              name="transport-mode"
-              checked={!useLibcurlTransport}
-              onChange={() => {
-                setPreferences({ useLibcurlTransport: false });
-                toast.success("Using Epoxy transport (default). Applies on next navigation.");
-              }}
-              className="accent-primary"
-            />
-            <div>
-              <p className="text-sm font-medium text-foreground">Epoxy transport (default)</p>
-              <p className="text-xs text-muted-foreground">Standard BareMux + EpoxyTransport + wisp</p>
-            </div>
-          </label>
-          <label className="flex items-center gap-3 rounded-lg border border-primary/40 bg-primary/5 p-3 cursor-pointer hover:bg-primary/10">
-            <input
-              type="radio"
-              name="transport-mode"
-              checked={useLibcurlTransport}
-              onChange={() => {
-                setPreferences({ useLibcurlTransport: true });
-                toast.success("libcurl transport (Tinf0il mode) enabled. Applies on next navigation.");
-              }}
-              className="accent-primary"
-            />
-            <div>
-              <p className="text-sm font-medium text-primary">libcurl transport (Tinf0il mode)</p>
-              <p className="text-xs text-muted-foreground">More efficient, better filter bypass — same transport Tinf0il uses</p>
-            </div>
-          </label>
-        </div>
       </div>
 
       <div className="h-px bg-border/40" />

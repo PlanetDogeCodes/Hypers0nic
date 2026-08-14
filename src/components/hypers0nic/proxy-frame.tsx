@@ -15,7 +15,6 @@ export function ProxyFrame() {
   const proxyReady = useHypers0nic((s) => s.proxyReady);
   const recordVisit = useHypers0nic((s) => s.recordVisit);
   const topBarAlwaysVisible = useHypers0nic((s) => s.settings.preferences.topBarAlwaysVisible);
-  const tabsCount = useHypers0nic((s) => s.tabs.length);
   const setOmnibox = useHypers0nic((s) => s.setOmnibox);
   const [mounted, setMounted] = useState(false);
 
@@ -291,15 +290,8 @@ export function ProxyFrame() {
     };
   }, []);
 
-  // Height: account for header (3rem when visible) and tab bar (2rem when
-  // 2+ tabs). Use inline style because Tailwind can't JIT dynamic class names.
-  const headerH = mounted && topBarAlwaysVisible ? 3 : 0;
-  const tabH = mounted && tabsCount > 1 ? 2 : 0;
-  const totalH = headerH + tabH;
-  const frameHeight = totalH > 0 ? `calc(100vh - ${totalH}rem)` : "100vh";
-
   return (
-    <div className="flex flex-col" style={{ height: frameHeight }}>
+    <div className={mounted && topBarAlwaysVisible ? "flex h-[calc(100vh-3rem)] flex-col" : "flex h-screen flex-col"}>
       <ProxyToolbar status={status} />
       <div className="relative flex-1 bg-background">
         {status === "loading" && (

@@ -59,7 +59,6 @@ const eslintConfig = [...nextCoreWebVitals, ...nextTypescript, {
     "public/scramjet/**",
     "public/epoxy/**",
     "public/baremux/**",
-    "public/libcurl/**",
     "public/sw.js",
     // Standalone mini-service with its own toolchain.
     "mini-services/**",

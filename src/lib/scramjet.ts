@@ -26,16 +26,8 @@ const SCRAMJET_FILES = {
   sync: "/scramjet/scramjet.sync.js",
 };
 
-// Comprehensive list of public wisp relays. We try them ALL concurrently
-// and use whichever connects first. Netsweeper and similar filters block
-// known proxy domains by SNI/DNS inspection — having many mirrors increases
-// the chance that at least one isn't in the blocklist.
 const FALLBACK_WISP_SERVERS = [
   "wss://wisp.mercurywork.shop/",
-  "wss://anura.pro",
-  "wss://wispmirror.mercurywork.shop/",
-  "wss://wisp.4everland.app/",
-  "wss://wisp.fr/".replace("wisp.fr", "wisp.metaldev.org"),
 ];
 
 export type ScramjetStatus = "idle" | "loading" | "ready" | "error";
@@ -97,15 +89,12 @@ class ScramjetManager {
     this.setState({ status: "loading", error: undefined });
     try {
       const wispUrl = this.resolveWispUrl(customWisp);
-      // Load the bundle FIRST, then set up transport.
+      // Load the bundle FIRST, then set up transport. This order is more
+      // reliable: the bundle is a local file (fast, always succeeds), and
+      // the transport setup can take time (wisp negotiation). If transport
+      // fails, we still have the bundle loaded for the retry.
       await this.loadBundle();
-      // Add a timeout on transport setup so it can't hang silently forever.
-      await Promise.race([
-        this.setupTransport(wispUrl),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("setupTransport timeout (60s)")), 60000)
-        ),
-      ]);
+      await this.setupTransport(wispUrl);
       await ensureFreshScramjetDB();
 
       const factory = window.$scramjetLoadController!;
@@ -179,11 +168,13 @@ class ScramjetManager {
 
   private async setupTransport(wispUrl: string): Promise<void> {
     // Reuse existing transport if it's already connected to the same URL.
+    // This prevents leaking BareMuxConnection workers on re-init.
     if (this.transportConn && this.transportUrl === wispUrl) {
+      // Health check: verify the transport is still alive.
       try {
         const port = this.transportConn.getInnerPort?.();
         if (port && typeof port === "object" && "postMessage" in port) {
-          return;
+          return; // Transport is alive, reuse it.
         }
       } catch {
         // Health check failed — fall through to reconnect.
@@ -191,112 +182,45 @@ class ScramjetManager {
       this.transportUrl = null;
     }
 
-    // Validate the wisp URL
+    // Validate the wisp URL before attempting connection
     if (!wispUrl || (!wispUrl.startsWith("ws://") && !wispUrl.startsWith("wss://"))) {
       wispUrl = FALLBACK_WISP_SERVERS[0];
     }
 
     const { BareMuxConnection } = await import("@mercuryworkshop/bare-mux");
 
-    // Build the full candidate list: user's URL, all fallbacks, local relay,
-    // and ws:// variants of every wss:// URL.
-    const localRelay = this.resolveLocalRelay();
-    const baseCandidates = [wispUrl, ...FALLBACK_WISP_SERVERS, localRelay].filter(
-      (v, i, a) => v && a.indexOf(v) === i
-    );
-    const candidates: string[] = [];
-    for (const c of baseCandidates) {
-      candidates.push(c);
-      if (c.startsWith("wss://")) {
-        const wsVariant = "ws://" + c.substring(6);
-        if (!candidates.includes(wsVariant)) candidates.push(wsVariant);
-      }
-    }
-
-    // Check if we should use libcurl transport.
-    const settingsRaw = typeof window !== "undefined" ? localStorage.getItem("hypers0nic:settings:v1") : null;
-    const settings = settingsRaw ? JSON.parse(settingsRaw) : {};
-    const useLibcurl = settings?.preferences?.useLibcurlTransport;
-
-    if (useLibcurl) {
-      console.log("[hypers0nic] using libcurl transport (Tinf0il mode)");
-      // Create ONE BareMuxConnection for libcurl
+    if (!this.transportConn) {
       this.transportConn = new BareMuxConnection("/baremux/worker.js");
-      return this.setupLibcurlTransport(this.transportConn, candidates);
     }
-
-    // CRITICAL: Use ONE BareMuxConnection and try candidates sequentially on it.
-    // Creating multiple BareMuxConnection instances corrupts the SharedWorker.
-    // We create ONE connection, then try each candidate with setTransport on it.
-    // If a candidate fails, we just call setTransport again with the next URL —
-    // the BareMux worker handles this gracefully (it replaces the old transport).
-    this.transportConn = new BareMuxConnection("/baremux/worker.js");
     const conn = this.transportConn;
 
-    console.log("[hypers0nic] trying", candidates.length, "wisp relay candidates sequentially (epoxy)");
+    const localRelay = this.resolveLocalRelay();
+    const candidates = [wispUrl, ...FALLBACK_WISP_SERVERS, localRelay].filter(
+      (v, i, a) => v && a.indexOf(v) === i
+    );
 
     let lastError: unknown;
     for (const candidate of candidates) {
       try {
-        console.log("[hypers0nic] trying transport:", candidate);
         const transportPromise = conn.setTransport("/epoxy/index.mjs", [
           { wisp: candidate },
         ]);
         const timeoutPromise = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error(`timeout for ${candidate}`)), 6000)
+          setTimeout(
+            () => reject(new Error(`transport timeout for ${candidate}`)),
+            15000
+          )
         );
         await Promise.race([transportPromise, timeoutPromise]);
         this.transportUrl = candidate;
-        console.log("[hypers0nic] transport connected via", candidate);
         return;
       } catch (err) {
         console.warn(`[hypers0nic] transport failed for ${candidate}:`, err);
         lastError = err;
       }
     }
-
-    // If all epoxy candidates failed, try libcurl as a last resort.
-    console.log("[hypers0nic] all epoxy candidates failed, trying libcurl fallback...");
-    try {
-      return await this.setupLibcurlTransport(conn, candidates);
-    } catch (libcurlErr) {
-      console.warn("[hypers0nic] libcurl fallback also failed:", libcurlErr);
-    }
-
     throw new Error(
-      `Could not establish a wisp transport after trying ${candidates.length} candidates: ${
-        lastError instanceof Error ? lastError.message : String(lastError)
-      }`
-    );
-  }
-
-  /**
-   * Setup transport using libcurl-transport (Tinf0il mode).
-   * libcurl speaks wisp directly without BareMux/Epoxy, which is more
-   * efficient and handles network filters better. This is the same approach
-   * Tinf0il uses — libcurl mode IS Tinf0il mode.
-   */
-  private async setupLibcurlTransport(conn: any, candidates: string[]): Promise<void> {
-    const { LibcurlClient } = await import("@mercuryworkshop/libcurl-transport");
-
-    let lastError: unknown;
-    for (const candidate of candidates) {
-      try {
-        console.log("[hypers0nic] trying libcurl transport for", candidate);
-        const client = new LibcurlClient({ wisp: candidate });
-        await client.init();
-        // Use setRemoteTransport to pass the libcurl client to the BareMux worker.
-        await conn.setRemoteTransport(client);
-        this.transportUrl = candidate;
-        console.log("[hypers0nic] libcurl transport connected via", candidate);
-        return;
-      } catch (err) {
-        console.warn(`[hypers0nic] libcurl transport failed for ${candidate}:`, err);
-        lastError = err;
-      }
-    }
-    throw new Error(
-      `Could not establish a libcurl transport after trying ${candidates.length} candidates: ${
+      `Could not establish a wisp transport: ${
         lastError instanceof Error ? lastError.message : String(lastError)
       }`
     );
@@ -312,9 +236,8 @@ class ScramjetManager {
     this.initPromise = null;
     this.transportUrl = null;
     this.controller = null;
-    this.bundleLoaded = false;
-    // Reset the transport connection so setupTransport creates a fresh one.
-    this.transportConn = null;
+    // Don't destroy the transportConn — reuse it on next init. Destroying
+    // it can leave orphaned workers. Instead, just mark it for re-setup.
     this.setState({ status: "idle" });
   }
 

@@ -37,7 +37,6 @@ export function ProxyToolbar({
   const bookmarks = useHypers0nic((s) => s.bookmarks);
   const toggleBookmark = useHypers0nic((s) => s.toggleBookmark);
   const topBarAlwaysVisible = useHypers0nic((s) => s.settings.preferences.topBarAlwaysVisible);
-  const tabsCount = useHypers0nic((s) => s.tabs.length);
   const [visible, setVisible] = useState(topBarAlwaysVisible);
 
   useEffect(() => {
@@ -75,20 +74,18 @@ export function ProxyToolbar({
   const btn =
     "inline-flex size-8 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-card hover:text-foreground active:scale-90 disabled:pointer-events-none disabled:opacity-30";
   const isBookmarked = bookmarks.some((b) => b.url === omniboxValue);
-  const toolbarTop = tabsCount > 1 ? "top-8" : "top-0";
 
   return (
     <>
       {/* Invisible hover zone — only needed when auto-hidden */}
       {!topBarAlwaysVisible && (
-        <div className={cn("fixed left-0 right-0 z-40 h-10", toolbarTop)} onMouseEnter={() => setVisible(true)} />
+        <div className="fixed left-0 right-0 top-0 z-40 h-10" onMouseEnter={() => setVisible(true)} />
       )}
 
       <div
         id="proxy-toolbar"
         className={cn(
-          "fixed left-0 right-0 z-50 border-b border-border/30 bg-background/95 backdrop-blur-md transition-transform duration-200",
-          toolbarTop,
+          "fixed left-0 right-0 top-0 z-50 border-b border-border/30 bg-background/95 backdrop-blur-md transition-transform duration-200",
           visible ? "translate-y-0" : "-translate-y-full"
         )}
       >

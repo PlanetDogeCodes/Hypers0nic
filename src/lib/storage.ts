@@ -1,11 +1,10 @@
-import type { Hypers0nicSettings, HistoryEntry, Bookmark, CustomShortcut, ProxyTab } from "./types";
+import type { Hypers0nicSettings, HistoryEntry, Bookmark, CustomShortcut } from "./types";
 
 const SETTINGS_KEY = "hypers0nic:settings:v1";
 const HISTORY_KEY = "hypers0nic:history:v1";
 const BOOKMARKS_KEY = "hypers0nic:bookmarks:v1";
 const FOCUS_SESSIONS_KEY = "hypers0nic:focus-sessions:v1";
 const CUSTOM_SHORTCUTS_KEY = "hypers0nic:custom-shortcuts:v1";
-const TABS_KEY = "hypers0nic:tabs:v1";
 
 export const DEFAULT_SETTINGS: Hypers0nicSettings = {
   theme: "hypers0nic",
@@ -36,7 +35,6 @@ export const DEFAULT_SETTINGS: Hypers0nicSettings = {
     panicUrl: "https://classroom.google.com",
     adBlockerEnabled: true,
     autoProxyLinks: true,
-    useLibcurlTransport: false,
   },
   // Default wisp relay. Using wss://anura.pro as the public relay.
   wispUrl: "wss://anura.pro",
@@ -260,34 +258,4 @@ function deepMerge<T>(base: T, override: Partial<T>): T {
     }
   }
   return out as T;
-}
-
-export function loadTabs(): ProxyTab[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = window.localStorage.getItem(TABS_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter((t: any) => t && typeof t.id === "string" && typeof t.url === "string")
-      .map((t: any) => ({
-        id: t.id,
-        url: t.url,
-        title: typeof t.title === "string" ? t.title : t.url,
-        navNonce: typeof t.navNonce === "number" ? t.navNonce : 0,
-      }))
-      .slice(0, 8) as ProxyTab[];
-  } catch {
-    return [];
-  }
-}
-
-export function saveTabs(tabs: ProxyTab[]) {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(TABS_KEY, JSON.stringify(tabs.slice(0, 8)));
-  } catch {
-    /* ignore */
-  }
 }

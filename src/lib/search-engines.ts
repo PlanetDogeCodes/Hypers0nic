@@ -70,8 +70,24 @@ export function isLikelyUrl(input: string): boolean {
 export function normalizeInput(input: string, engine: SearchEngine): string {
   const trimmed = input.trim();
   if (isLikelyUrl(trimmed)) {
-    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed)) return trimmed;
-    return `https://${trimmed}`;
+    let url: string;
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed)) {
+      url = trimmed;
+    } else {
+      url = `https://${trimmed}`;
+    }
+    // Auto-add trailing slash if the URL has no path (e.g., "https://example.com"
+    // becomes "https://example.com/"). This prevents 404s on sites that redirect
+    // to the slash version, and ensures the proxy URL is consistent.
+    try {
+      const parsed = new URL(url);
+      if (parsed.pathname === "") {
+        url = url + "/";
+      }
+    } catch {
+      // Not a valid URL, leave as-is
+    }
+    return url;
   }
   return engine.url.replace("%s", encodeURIComponent(trimmed));
 }

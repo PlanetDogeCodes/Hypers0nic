@@ -35,7 +35,6 @@ export function Header({
   const history = useHypers0nic((s) => s.history);
   const tabCloak = useHypers0nic((s) => s.settings.tabCloak);
   const toggleStealth = useHypers0nic((s) => s.toggleStealth);
-  const tabsCount = useHypers0nic((s) => s.tabs.length);
   const topBarAlwaysVisible = useHypers0nic((s) => s.settings.preferences.topBarAlwaysVisible);
   const [visible, setVisible] = useState(topBarAlwaysVisible);
 
@@ -71,23 +70,16 @@ export function Header({
     );
   };
 
-  // When tabs are visible (2+), the header sits below the tab bar (~2rem).
-  // Otherwise it sits at the top (top-0).
-  const headerTop = tabsCount > 1 ? "top-8" : "top-0";
-  // The hover zone also needs to shift down when tabs are visible.
-  const hoverZoneTop = tabsCount > 1 ? "top-8" : "top-0";
-
   return (
     <>
       {!topBarAlwaysVisible && (
-        <div className={cn("fixed left-0 right-0 z-40 h-10", hoverZoneTop)} onMouseEnter={() => setVisible(true)} />
+        <div className="fixed left-0 right-0 top-0 z-40 h-10" onMouseEnter={() => setVisible(true)} />
       )}
 
       <header
         id="main-header"
         className={cn(
-          "fixed left-0 right-0 z-50 flex h-12 items-center gap-3 border-b border-border/30 bg-background/95 px-4 backdrop-blur-md transition-transform duration-200",
-          headerTop,
+          "fixed left-0 right-0 top-0 z-50 flex h-12 items-center gap-3 border-b border-border/30 bg-background/95 px-4 backdrop-blur-md transition-transform duration-200",
           visible ? "translate-y-0" : "-translate-y-full"
         )}
       >
