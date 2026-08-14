@@ -37,6 +37,10 @@ export function ProxyToolbar({
   const bookmarks = useHypers0nic((s) => s.bookmarks);
   const toggleBookmark = useHypers0nic((s) => s.toggleBookmark);
   const topBarAlwaysVisible = useHypers0nic((s) => s.settings.preferences.topBarAlwaysVisible);
+  // When 2+ proxy tabs are open, the TabBar is rendered above the toolbar.
+  // Shift the toolbar down by 2rem (top-8) to make room.
+  const tabCount = useHypers0nic((s) => s.tabs.length);
+  const hasTabBar = tabCount >= 2;
   const [visible, setVisible] = useState(topBarAlwaysVisible);
 
   useEffect(() => {
@@ -79,13 +83,14 @@ export function ProxyToolbar({
     <>
       {/* Invisible hover zone — only needed when auto-hidden */}
       {!topBarAlwaysVisible && (
-        <div className="fixed left-0 right-0 top-0 z-40 h-10" onMouseEnter={() => setVisible(true)} />
+        <div className={cn("fixed left-0 right-0 top-0 z-40 h-10", hasTabBar && "top-8")} onMouseEnter={() => setVisible(true)} />
       )}
 
       <div
         id="proxy-toolbar"
         className={cn(
-          "fixed left-0 right-0 top-0 z-50 border-b border-border/30 bg-background/95 backdrop-blur-md transition-transform duration-200",
+          "fixed left-0 right-0 z-50 border-b border-border/30 bg-background/95 backdrop-blur-md transition-transform duration-200",
+          hasTabBar ? "top-8" : "top-0",
           visible ? "translate-y-0" : "-translate-y-full"
         )}
       >

@@ -199,6 +199,22 @@ class ScramjetManager {
       (v, i, a) => v && a.indexOf(v) === i
     );
 
+    // If the user has enabled the libcurl transport preference (Tinf0il mode),
+    // use libcurl instead of epoxy. libcurl uses a different WASM-based
+    // transport that can bypass some network restrictions epoxy can't.
+    const settingsRaw =
+      typeof window !== "undefined"
+        ? localStorage.getItem("hypers0nic:settings:v1")
+        : null;
+    const settings = settingsRaw ? JSON.parse(settingsRaw) : {};
+    const useLibcurl = settings?.preferences?.useLibcurlTransport;
+
+    if (useLibcurl) {
+      console.log("[hypers0nic] using libcurl transport (Tinf0il mode)");
+      this.transportConn = new BareMuxConnection("/baremux/worker.js");
+      return this.setupLibcurlTransport(this.transportConn, candidates);
+    }
+
     let lastError: unknown;
     for (const candidate of candidates) {
       try {
@@ -219,11 +235,43 @@ class ScramjetManager {
         lastError = err;
       }
     }
+    // All epoxy candidates failed — try libcurl as a last-resort fallback.
+    console.log("[hypers0nic] all epoxy candidates failed, trying libcurl fallback...");
+    try {
+      return await this.setupLibcurlTransport(conn, candidates);
+    } catch (libcurlErr) {
+      console.warn("[hypers0nic] libcurl fallback also failed:", libcurlErr);
+    }
     throw new Error(
       `Could not establish a wisp transport: ${
         lastError instanceof Error ? lastError.message : String(lastError)
       }`
     );
+  }
+
+  /**
+   * Set up the libcurl transport (Tinf0il mode). Iterates through wisp
+   * candidates and tries to establish a libcurl connection for each. Throws
+   * if all candidates fail.
+   */
+  private async setupLibcurlTransport(conn: any, candidates: string[]): Promise<void> {
+    const { LibcurlClient } = await import("@mercuryworkshop/libcurl-transport");
+    let lastError: unknown;
+    for (const candidate of candidates) {
+      try {
+        console.log("[hypers0nic] trying libcurl transport for", candidate);
+        const client = new LibcurlClient({ wisp: candidate });
+        await client.init();
+        await conn.setRemoteTransport(client);
+        this.transportUrl = candidate;
+        console.log("[hypers0nic] libcurl transport connected via", candidate);
+        return;
+      } catch (err) {
+        console.warn(`[hypers0nic] libcurl transport failed for ${candidate}:`, err);
+        lastError = err;
+      }
+    }
+    throw new Error(`Could not establish a libcurl transport after trying ${candidates.length} candidates: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
   }
 
   /**

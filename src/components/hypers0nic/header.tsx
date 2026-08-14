@@ -36,6 +36,10 @@ export function Header({
   const tabCloak = useHypers0nic((s) => s.settings.tabCloak);
   const toggleStealth = useHypers0nic((s) => s.toggleStealth);
   const topBarAlwaysVisible = useHypers0nic((s) => s.settings.preferences.topBarAlwaysVisible);
+  // When there are 2+ proxy tabs, the TabBar is rendered above the header.
+  // We shift the header down by 2rem (top-8) to make room for it.
+  const tabCount = useHypers0nic((s) => s.tabs.length);
+  const hasTabBar = tabCount >= 2;
   const [visible, setVisible] = useState(topBarAlwaysVisible);
 
   useEffect(() => {
@@ -73,13 +77,14 @@ export function Header({
   return (
     <>
       {!topBarAlwaysVisible && (
-        <div className="fixed left-0 right-0 top-0 z-40 h-10" onMouseEnter={() => setVisible(true)} />
+        <div className={cn("fixed left-0 right-0 top-0 z-40 h-10", hasTabBar && "top-8")} onMouseEnter={() => setVisible(true)} />
       )}
 
       <header
         id="main-header"
         className={cn(
-          "fixed left-0 right-0 top-0 z-50 flex h-12 items-center gap-3 border-b border-border/30 bg-background/95 px-4 backdrop-blur-md transition-transform duration-200",
+          "fixed left-0 right-0 z-50 flex h-12 items-center gap-3 border-b border-border/30 bg-background/95 px-4 backdrop-blur-md transition-transform duration-200",
+          hasTabBar ? "top-8" : "top-0",
           visible ? "translate-y-0" : "-translate-y-full"
         )}
       >

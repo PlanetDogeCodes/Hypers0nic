@@ -37,6 +37,8 @@ export function AdvancedPanel() {
   const wispUrl = useHypers0nic((s) => s.settings.wispUrl);
   const setWispUrl = useHypers0nic((s) => s.setWispUrl);
   const scramjet = useHypers0nic((s) => s.scramjet);
+  const useLibcurlTransport = useHypers0nic((s) => s.settings.preferences.useLibcurlTransport);
+  const setPreferences = useHypers0nic((s) => s.setPreferences);
 
   const [draft, setDraft] = useState(wispUrl);
   const [testing, setTesting] = useState(false);
@@ -182,6 +184,70 @@ export function AdvancedPanel() {
         <Button variant="ghost" size="sm" onClick={handleReset} className="mt-1 h-7 text-xs">
           Reset to local relay
         </Button>
+      </div>
+
+      <div className="h-px bg-border/40" />
+
+      {/* Transport mode — Epoxy (default) vs libcurl (Tinf0il mode) */}
+      <div className="space-y-3">
+        <h3 className="text-sm font-semibold text-foreground">Transport mode</h3>
+        <p className="text-xs text-muted-foreground">
+          Choose how Scramjet tunnels traffic to the wisp relay. Epoxy is the
+          default and works well in most environments. libcurl (Tinf0il mode)
+          uses a different WASM-based transport that can bypass some network
+          restrictions epoxy cannot, at the cost of slightly higher latency.
+        </p>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <label
+            className={
+              "flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors " +
+              (!useLibcurlTransport
+                ? "border-primary/60 bg-primary/5"
+                : "border-border/40 hover:border-border/70")
+            }
+          >
+            <input
+              type="radio"
+              name="transport-mode"
+              className="mt-0.5 accent-primary"
+              checked={!useLibcurlTransport}
+              onChange={() => setPreferences({ useLibcurlTransport: false })}
+            />
+            <div className="space-y-0.5">
+              <div className="text-sm font-medium text-foreground">Epoxy</div>
+              <div className="text-[11px] text-muted-foreground">
+                Default. Faster, lower overhead. Recommended for general use.
+              </div>
+            </div>
+          </label>
+          <label
+            className={
+              "flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors " +
+              (useLibcurlTransport
+                ? "border-primary/60 bg-primary/5"
+                : "border-border/40 hover:border-border/70")
+            }
+          >
+            <input
+              type="radio"
+              name="transport-mode"
+              className="mt-0.5 accent-primary"
+              checked={useLibcurlTransport}
+              onChange={() => {
+                setPreferences({ useLibcurlTransport: true });
+                toast.success("libcurl transport enabled. It applies on the next proxy boot.");
+              }}
+            />
+            <div className="space-y-0.5">
+              <div className="text-sm font-medium text-foreground">
+                libcurl <span className="text-[10px] text-primary">(Tinf0il mode)</span>
+              </div>
+              <div className="text-[11px] text-muted-foreground">
+                Fallback for restrictive networks. Auto-used if epoxy fails.
+              </div>
+            </div>
+          </label>
+        </div>
       </div>
 
       <div className="h-px bg-border/40" />

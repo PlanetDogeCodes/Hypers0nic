@@ -8,9 +8,7 @@ interface ShortcutHandlers {
   onOpenSettings?: () => void;
   onOpenHistory?: () => void;
   onOpenPalette?: () => void;
-  // Ctrl+Shift+A → quick-open the apps panel (Task 5).
   onOpenApps?: () => void;
-  // Ctrl+Shift+T → reopen the most recently closed tab (Task 5).
   onReopenClosedTab?: () => void;
 }
 
@@ -22,9 +20,9 @@ interface ShortcutHandlers {
  *   Esc            Go home / close overlays
  *   Ctrl+,         Open settings
  *   Ctrl+H         Toggle history panel
- *   Ctrl+Shift+A   Open the apps panel (quick-launcher)
- *   Ctrl+Shift+T   Reopen the most recently closed tab
  *   Ctrl+`         Toggle stealth mode (instant tab cloak)
+ *   Ctrl+Shift+A   Open the apps panel
+ *   Ctrl+Shift+T   Reopen the most recently closed tab
  *   Alt+←          Go back (proxy view)
  *   Alt+→          Go forward (proxy view)
  */
@@ -73,33 +71,16 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers) {
         return;
       }
 
-      // Ctrl+Shift+A → quick-open the apps panel (Task 5). Skipped while
-      // typing in an input/textarea/contentEditable so it doesn't fight with
-      // text entry. Case-insensitive: key can be "A" or "a" depending on
-      // caps-lock / shift state across browsers.
-      if (
-        (e.ctrlKey || e.metaKey) &&
-        e.shiftKey &&
-        !e.altKey &&
-        (e.key === "A" || e.key === "a") &&
-        !isTyping
-      ) {
+      // Ctrl+Shift+A → open apps panel (works everywhere, not in a dialog)
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "A" || e.key === "a") && !dialogOpen) {
         e.preventDefault();
         handlers.onOpenApps?.();
         return;
       }
 
-      // Ctrl+Shift+T → reopen the most recently closed tab (Task 5). Same
-      // typing guard as Ctrl+Shift+A. preventDefault is important here: most
-      // browsers bind Ctrl+Shift+T to "reopen closed window" at the browser
-      // level, so we must swallow that to keep the keystroke for ourselves.
-      if (
-        (e.ctrlKey || e.metaKey) &&
-        e.shiftKey &&
-        !e.altKey &&
-        (e.key === "T" || e.key === "t") &&
-        !isTyping
-      ) {
+      // Ctrl+Shift+T → reopen the most recently closed tab (works everywhere
+      // except when a dialog is open — the dialog might consume Ctrl+T itself)
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "T" || e.key === "t") && !dialogOpen) {
         e.preventDefault();
         handlers.onReopenClosedTab?.();
         return;

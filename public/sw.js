@@ -99,13 +99,13 @@ self.addEventListener("message", function(event) {
   if (event.data === "skipWaiting") self.skipWaiting();
   else if (event.data === "controllerReady") notifyControllerReady();
   else if (event.data === "releaseDB") {
+    // DON'T null scramjet or reset controllerReady here. The old code reset
+    // controllerReady=false which caused the fetch handler to wait again,
+    // and if controllerReady message was lost, scramjet would be null.
+    // Instead, just reset configLoaded so the config is reloaded on next fetch.
     configLoaded = false;
-    controllerReady = false;
   }
   else if (event.data === "ping") {
-    // Transport keepalive ping. The main thread sends this every 30s to
-    // verify the SW is alive and the config is loaded. If the config is
-    // not loaded, we try to reload it before responding.
     event.source && event.source.postMessage({ type: "pong", configLoaded: configLoaded, controllerReady: controllerReady });
   }
 });
@@ -339,13 +339,34 @@ function healScramjetDB() {
 
 // Safe loadConfig wrapper — heals the DB if the transaction fails.
 // Races loadConfig() against a 5-second timeout to prevent hangs.
+// CRITICAL: If scramjet is null, we create it first. This prevents the
+// "Cannot read properties of null (reading 'loadConfig')" error that occurs
+// when releaseDB resets controllerReady but controllerReady hasn't re-arrived.
 function safeLoadConfig() {
+  // Ensure scramjet exists before trying to call loadConfig
+  if (!scramjet) {
+    console.warn("[hypers0nic/sw] safeLoadConfig: scramjet is null, creating it");
+    try {
+      scramjet = new ScramjetServiceWorker();
+    } catch (e) {
+      console.error("[hypers0nic/sw] failed to create ScramjetServiceWorker:", e);
+      configLoaded = false;
+      return Promise.resolve();
+    }
+  }
+
   var configPromise = scramjet.loadConfig();
   var timeoutPromise = new Promise(function(_, reject) {
     setTimeout(function() { reject(new Error("loadConfig timeout")); }, 5000);
   });
   return Promise.race([configPromise, timeoutPromise]).then(function() {
-    configLoaded = true;
+    // Validate config has the expected prefix
+    if (scramjet.config && scramjet.config.prefix === PROXY_PREFIX) {
+      configLoaded = true;
+    } else {
+      console.warn("[hypers0nic/sw] config invalid or missing prefix after loadConfig");
+      configLoaded = false;
+    }
   }).catch(function(err) {
     if (err && (err.name === "NotFoundError" || (err.message && err.message.indexOf("object store") !== -1))) {
       return healScramjetDB().then(function() {
@@ -356,7 +377,7 @@ function safeLoadConfig() {
           setTimeout(function() { reject(new Error("loadConfig retry timeout")); }, 5000);
         });
         return Promise.race([retryPromise, retryTimeout]).then(function() {
-          configLoaded = true;
+          configLoaded = scramjet.config && scramjet.config.prefix === PROXY_PREFIX;
         }).catch(function() {
           configLoaded = false;
         });
@@ -471,14 +492,51 @@ self.addEventListener("fetch", function(event) {
             );
           }
 
-          // Null check: scramjet might be null if controllerReady was never
-          // received (e.g., the main thread crashed before signaling).
+          // Null check: if scramjet is null, create it. This happens when
+          // releaseDB was received (resets controllerReady) but controllerReady
+          // hasn't re-arrived yet. Instead of failing, we create the SW and
+          // load the config ourselves.
           if (!scramjet) {
+            console.warn("[hypers0nic/sw] scramjet is null in fetch handler, creating it");
+            try {
+              scramjet = new ScramjetServiceWorker();
+            } catch (e) {
+              return new Response(
+                "Proxy not ready: failed to create ScramjetServiceWorker: " + (e && e.message || e),
+                { status: 502, headers: { "Content-Type": "text/plain" } }
+              );
+            }
+          }
+
+          // CRITICAL: Ensure config is loaded before routing. The "Cannot read
+          // properties of undefined (reading 'prefix')" error occurs when
+          // scramjet.config is undefined.
+          if (!scramjet.config || !scramjet.config.prefix) {
+            console.log("[hypers0nic/sw] config missing, calling loadConfig()...");
+            try {
+              await scramjet.loadConfig();
+            } catch (configErr) {
+              console.warn("[hypers0nic/sw] loadConfig() failed:", configErr);
+              await healScramjetDB();
+              await new Promise(function(r) { setTimeout(r, 500); });
+              try { await scramjet.loadConfig(); } catch (e) {}
+            }
+          }
+
+          // Final check — if config is STILL missing, retry
+          if (!scramjet.config || !scramjet.config.prefix) {
+            if (i < maxAttempts - 1) {
+              console.warn("[hypers0nic/sw] config still not loaded, retrying...");
+              await new Promise(function(r) { setTimeout(r, delays[i] || 2000); });
+              continue;
+            }
             return new Response(
-              "Proxy not ready: ScramjetServiceWorker not initialized.",
+              "Proxy not ready: config not loaded after " + maxAttempts + " retries.",
               { status: 502, headers: { "Content-Type": "text/plain" } }
             );
           }
+
+          configLoaded = true;
 
           if (scramjet.route(event)) {
             // Use fetchWithRetry for transparent mid-stream retry on
