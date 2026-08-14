@@ -196,19 +196,14 @@ class ScramjetManager {
     const { BareMuxConnection } = await import("@mercuryworkshop/bare-mux");
 
     // Create a FRESH BareMuxConnection for each transport setup attempt.
-    // Reusing a connection that previously had a failed setTransport can
-    // cause the worker to be in a bad state.
     this.transportConn = new BareMuxConnection("/baremux/worker.js");
     const conn = this.transportConn;
 
-    // Build the full candidate list: user's URL, all fallbacks, local relay,
-    // and ws:// variants of every wss:// URL (some filters block wss:// on
-    // port 443 but allow ws:// on port 80).
+    // Build the full candidate list.
     const localRelay = this.resolveLocalRelay();
     const baseCandidates = [wispUrl, ...FALLBACK_WISP_SERVERS, localRelay].filter(
       (v, i, a) => v && a.indexOf(v) === i
     );
-
     const candidates: string[] = [];
     for (const c of baseCandidates) {
       candidates.push(c);
@@ -218,102 +213,89 @@ class ScramjetManager {
       }
     }
 
-    console.log("[hypers0nic] trying", candidates.length, "wisp relay candidates concurrently");
+    // Check if we should use libcurl transport (Tinf0il mode or user preference).
+    // libcurl-transport speaks wisp directly without BareMux/Epoxy, which is
+    // what Tinf0il uses. It's more efficient and handles network filters better.
+    const settings = typeof window !== "undefined" ? JSON.parse(localStorage.getItem("hypers0nic:settings:v1") || "{}") : {};
+    const useLibcurl = settings?.preferences?.useLibcurlTransport || settings?.preferences?.tinf0ilMode;
 
-    // CONCURRENT RACING: Try ALL candidates at the same time. The first one
-    // that successfully connects wins. This is dramatically faster than
-    // sequential trying (8s × N candidates → 8s total) and ensures we find
-    // a working relay even if most are blocked by Netsweeper.
-    //
-    // Each candidate gets its own 8-second timeout. We use Promise.race
-    // on an array of "first to connect" promises.
-    const connectPromises = candidates.map((candidate) => {
-      return new Promise<string>(async (resolve, reject) => {
-        // Each candidate needs its own BareMuxConnection because
-        // setTransport is stateful — calling it on the same connection
-        // with different URLs can interfere.
-        let candidateConn: any = null;
-        try {
-          candidateConn = new BareMuxConnection("/baremux/worker.js");
-          const transportPromise = candidateConn.setTransport("/epoxy/index.mjs", [
-            { wisp: candidate },
-          ]);
-          const timeoutPromise = new Promise<never>((_, reject) =>
-            setTimeout(
-              () => reject(new Error(`timeout for ${candidate}`)),
-              8000
-            )
-          );
-          await Promise.race([transportPromise, timeoutPromise]);
-          // Success! This candidate connected. Return it.
-          resolve(candidate);
-        } catch (err) {
-          reject(err);
-        }
-      });
-    });
-
-    // Also try the MAIN connection (shared) concurrently — if one of the
-    // candidate connections wins, we'll copy its URL to the main connection.
-    const mainConnectPromise = (async (): Promise<string> => {
-      for (const candidate of candidates) {
-        try {
-          const transportPromise = conn.setTransport("/epoxy/index.mjs", [
-            { wisp: candidate },
-          ]);
-          const timeoutPromise = new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error(`timeout`)), 8000)
-          );
-          await Promise.race([transportPromise, timeoutPromise]);
-          return candidate;
-        } catch {
-          // Try next
-        }
-      }
-      throw new Error("all main connection candidates failed");
-    })();
-
-    // Race the main connection against all candidate connections.
-    // The first one to succeed wins.
-    try {
-      const winner = await Promise.race([
-        mainConnectPromise,
-        ...connectPromises.map((p) =>
-          p.catch(() => new Promise<string>(() => {})) // Don't reject on failure
-        ),
-      ]);
-
-      // If a candidate connection won (not the main), re-setup the main
-      // connection with the winning URL.
-      if (winner) {
-        this.transportUrl = winner;
-        // Check if the main connection already connected to this URL
-        try {
-          const port = conn.getInnerPort?.();
-          if (!(port && typeof port === "object" && "postMessage" in port)) {
-            // Main connection didn't win — re-setup with the winning URL
-            await conn.setTransport("/epoxy/index.mjs", [{ wisp: winner }]);
-          }
-        } catch {
-          await conn.setTransport("/epoxy/index.mjs", [{ wisp: winner }]);
-        }
-        console.log("[hypers0nic] transport connected via", winner);
-        return;
-      }
-    } catch (err) {
-      console.warn("[hypers0nic] all concurrent connections failed:", err);
+    if (useLibcurl) {
+      console.log("[hypers0nic] using libcurl transport (Tinf0il mode)");
+      return this.setupLibcurlTransport(conn, candidates);
     }
 
-    // Last resort: try each candidate sequentially on the main connection
-    // with a very short timeout (3s). This handles the edge case where
-    // concurrent connections all failed due to resource limits.
+    // Default: epoxy transport with concurrent racing.
+    console.log("[hypers0nic] trying", candidates.length, "wisp relay candidates concurrently (epoxy)");
+
+    // CONCURRENT RACING: Try a FEW candidates at a time (not all 11 at once,
+    // which can OOM the dev server). We try the first 4 concurrently, and if
+    // none succeed, try the next 4, etc. This balances speed with memory.
+    const BATCH_SIZE = 4;
+    for (let batchStart = 0; batchStart < candidates.length; batchStart += BATCH_SIZE) {
+      const batch = candidates.slice(batchStart, batchStart + BATCH_SIZE);
+      console.log(`[hypers0nic] trying batch ${Math.floor(batchStart / BATCH_SIZE) + 1}:`, batch.length, "candidates");
+
+      const batchPromises = batch.map((candidate) => {
+        return new Promise<string>(async (resolve, reject) => {
+          let candidateConn: any = null;
+          try {
+            candidateConn = new BareMuxConnection("/baremux/worker.js");
+            const transportPromise = candidateConn.setTransport("/epoxy/index.mjs", [{ wisp: candidate }]);
+            const timeoutPromise = new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error(`timeout for ${candidate}`)), 8000)
+            );
+            await Promise.race([transportPromise, timeoutPromise]);
+            resolve(candidate);
+          } catch (err) {
+            reject(err);
+          }
+        });
+      });
+
+      // Also try on the main connection with the first candidate of this batch
+      const mainPromise = (async (): Promise<string> => {
+        for (const candidate of batch) {
+          try {
+            const transportPromise = conn.setTransport("/epoxy/index.mjs", [{ wisp: candidate }]);
+            const timeoutPromise = new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error(`timeout`)), 8000)
+            );
+            await Promise.race([transportPromise, timeoutPromise]);
+            return candidate;
+          } catch { /* Try next */ }
+        }
+        throw new Error("batch failed");
+      })();
+
+      try {
+        const winner = await Promise.race([
+          mainPromise,
+          ...batchPromises.map((p) => p.catch(() => new Promise<string>(() => {}))),
+        ]);
+        if (winner) {
+          this.transportUrl = winner;
+          try {
+            const port = conn.getInnerPort?.();
+            if (!(port && typeof port === "object" && "postMessage" in port)) {
+              await conn.setTransport("/epoxy/index.mjs", [{ wisp: winner }]);
+            }
+          } catch {
+            await conn.setTransport("/epoxy/index.mjs", [{ wisp: winner }]);
+          }
+          console.log("[hypers0nic] transport connected via", winner);
+          return;
+        }
+      } catch {
+        // This batch failed, try the next batch
+      }
+    }
+
+    // Sequential fallback.
     console.log("[hypers0nic] falling back to sequential connection...");
     let lastError: unknown;
     for (const candidate of candidates) {
       try {
-        const transportPromise = conn.setTransport("/epoxy/index.mjs", [
-          { wisp: candidate },
-        ]);
+        const transportPromise = conn.setTransport("/epoxy/index.mjs", [{ wisp: candidate }]);
         const timeoutPromise = new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error(`timeout for ${candidate}`)), 5000)
         );
@@ -328,6 +310,39 @@ class ScramjetManager {
     }
     throw new Error(
       `Could not establish a wisp transport after trying ${candidates.length} candidates: ${
+        lastError instanceof Error ? lastError.message : String(lastError)
+      }`
+    );
+  }
+
+  /**
+   * Setup transport using libcurl-transport (Tinf0il mode).
+   * libcurl speaks wisp directly without BareMux/Epoxy, which is more
+   * efficient and handles network filters better. This is the same approach
+   * Tinf0il uses.
+   */
+  private async setupLibcurlTransport(conn: any, candidates: string[]): Promise<void> {
+    const { LibcurlClient } = await import("@mercuryworkshop/libcurl-transport");
+
+    // Try each candidate sequentially with libcurl.
+    let lastError: unknown;
+    for (const candidate of candidates) {
+      try {
+        console.log("[hypers0nic] trying libcurl transport for", candidate);
+        const client = new LibcurlClient({ wisp: candidate });
+        await client.init();
+        // Use setRemoteTransport to pass the libcurl client to the BareMux worker.
+        await conn.setRemoteTransport(client);
+        this.transportUrl = candidate;
+        console.log("[hypers0nic] libcurl transport connected via", candidate);
+        return;
+      } catch (err) {
+        console.warn(`[hypers0nic] libcurl transport failed for ${candidate}:`, err);
+        lastError = err;
+      }
+    }
+    throw new Error(
+      `Could not establish a libcurl transport after trying ${candidates.length} candidates: ${
         lastError instanceof Error ? lastError.message : String(lastError)
       }`
     );

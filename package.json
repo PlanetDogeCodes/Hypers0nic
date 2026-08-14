@@ -21,6 +21,7 @@
     "@mdxeditor/editor": "^3.39.1",
     "@mercuryworkshop/bare-mux": "^2.1.9",
     "@mercuryworkshop/epoxy-transport": "2.1.28",
+    "@mercuryworkshop/libcurl-transport": "2.0.5",
     "@mercuryworkshop/scramjet": "^2.0.67-alpha.2",
     "@mercuryworkshop/wisp-js": "^0.4.1",
     "@prisma/client": "^6.11.1",

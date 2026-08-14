@@ -68,6 +68,8 @@ export interface Preferences {
   panicUrl: string;
   adBlockerEnabled: boolean;
   autoProxyLinks: boolean;
+  useLibcurlTransport: boolean;
+  tinf0ilMode: boolean;
 }
 
 export interface TinfoilProfile {
