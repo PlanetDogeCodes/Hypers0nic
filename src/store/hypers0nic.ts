@@ -375,9 +375,19 @@ export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
     });
     saveTabs(newTabs);
 
-    // Boot scramjet with aggressive retry. On networks with filters (e.g.
-    // Netsweeper), the first transport attempt may fail. We retry up to 3
-    // times with force-reconnect, trying different relays each time.
+    // CRITICAL: Ensure the SW is registered and controlling BEFORE initializing
+    // Scramjet. The Scramjet controller posts messages to the SW ("releaseDB"
+    // and "controllerReady"), which requires the SW to be controlling first.
+    // If we init Scramjet before the SW is ready, those messages are lost and
+    // the proxy silently fails.
+    const swOk = await ensureServiceWorker();
+    if (!swOk) {
+      console.error("[hypers0nic] service worker not controlling — navigation aborted");
+      set({ loading: false });
+      return;
+    }
+
+    // Now that the SW is controlling, boot Scramjet with aggressive retry.
     const sj = getScramjet();
     const tryInit = async () => {
       let lastErr: unknown;
@@ -400,16 +410,6 @@ export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
       await tryInit();
     } catch (err) {
       console.error("[hypers0nic] scramjet init failed after 3 attempts:", err);
-      set({ loading: false });
-      return;
-    }
-    // Ensure the SW is registered and controlling BEFORE setting proxyReady.
-    // This is the critical fix for the 40% failure rate: previously, the SW
-    // flag was set to true before registration completed, so /service/
-    // requests would 404. Now we await and verify.
-    const swOk = await ensureServiceWorker();
-    if (!swOk) {
-      console.error("[hypers0nic] service worker not controlling after registration");
       set({ loading: false });
       return;
     }
