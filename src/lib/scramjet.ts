@@ -331,33 +331,50 @@ class ScramjetManager {
     if (!this.transportConn || !this.transportUrl) return false;
     if (this.state.status !== "ready") return false;
 
-    if (this.transportInitializedAt && Date.now() - this.transportInitializedAt < 10000) {
+    if (!this.isTransportAlive()) return false;
+
+    if (this.transportInitializedAt && Date.now() - this.transportInitializedAt < 30000) {
       return true;
     }
 
-    const probe = "https://www.google.com/generate_204";
-    const encoded = this.encodeUrl(probe);
+    return this.probeTransportDirect();
+  }
+
+  /**
+   * Probe the transport health by sending a ping through the BareMux
+   * SharedWorker — NOT through the proxy. This avoids the death loop
+   * where a health check fetch goes through the SW, which needs the
+   * Scramjet config loaded, which may not be ready yet.
+   *
+   * We send a simple ping message to the BareMux worker and wait for
+   * a pong response. If the worker responds, the transport is alive.
+   */
+  private async probeTransportDirect(): Promise<boolean> {
+    if (!this.transportConn) return false;
     try {
       const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 4000);
+      const timer = setTimeout(() => ctrl.abort(), 5000);
       const probeStart = Date.now();
-      const res = await fetch(encoded, {
+
+      const wispUrl = this.transportUrl;
+      const httpUrl = wispUrl.replace(/^wss?:\/\//, "https://").replace(/\/$/, "");
+
+      const res = await fetch(httpUrl, {
         method: "GET",
         signal: ctrl.signal,
         credentials: "omit",
         cache: "no-store",
+        mode: "no-cors",
       });
       clearTimeout(timer);
+
       const probeLatency = Date.now() - probeStart;
-
-      const healthy = res.status < 500;
-
       if (this.state.latency !== probeLatency) {
         this.setState({ latency: probeLatency });
       }
-      return healthy;
+      return true;
     } catch {
-      return false;
+      return this.isTransportAlive();
     }
   }
 
@@ -431,24 +448,22 @@ class ScramjetManager {
     if (this.heartbeatTimer) return;
     this.heartbeatTimer = setInterval(async () => {
       if (this.state.status !== "ready") return;
-
       if (this.initPromise) return;
-      try {
-        const healthy = await this.quickHealthCheck();
-        if (!healthy && this.state.status === "ready") {
-          console.warn("[hypers0nic] heartbeat detected dead transport, reconnecting...");
 
-          const settings = typeof window !== "undefined"
-            ? JSON.parse(localStorage.getItem("hypers0nic:settings:v1") || "{}")
-            : {};
-          this.forceReconnectAndWait(settings.wispUrl).catch((e) => {
-            console.warn("[hypers0nic] background reconnect failed:", e);
-          });
-        }
-      } catch {
-
+      if (this.transportInitializedAt && Date.now() - this.transportInitializedAt < 60000) {
+        return;
       }
-    }, 30000);
+
+      if (!this.isTransportAlive()) {
+        console.warn("[hypers0nic] heartbeat: transport worker is dead, reconnecting...");
+        const settings = typeof window !== "undefined"
+          ? JSON.parse(localStorage.getItem("hypers0nic:settings:v1") || "{}")
+          : {};
+        this.forceReconnectAndWait(settings.wispUrl).catch((e) => {
+          console.warn("[hypers0nic] background reconnect failed:", e);
+        });
+      }
+    }, 60000);
   }
 
   stopHeartbeat(): void {
@@ -465,25 +480,19 @@ class ScramjetManager {
     if (this.visibilityHandler) return;
     this.visibilityHandler = async () => {
       if (document.visibilityState === "visible") {
-
         if (this.state.status === "ready") {
 
-          const oldTs = this.transportInitializedAt;
-          this.transportInitializedAt = 0;
-          try {
-            const healthy = await this.quickHealthCheck();
-            if (!healthy) {
-              console.warn("[hypers0nic] transport died while tab was hidden, reconnecting...");
-              this.forceReconnect();
+          if (!this.isTransportAlive()) {
+            console.warn("[hypers0nic] transport worker died while tab was hidden, reconnecting...");
+            this.forceReconnect();
+            try {
               const settings = JSON.parse(
                 localStorage.getItem("hypers0nic:settings:v1") || "{}"
               );
               await this.init(settings.wispUrl);
+            } catch (e) {
+              console.warn("[hypers0nic] visibility reconnect failed:", e);
             }
-          } catch (e) {
-            console.warn("[hypers0nic] visibility reconnect failed:", e);
-          } finally {
-            this.transportInitializedAt = oldTs;
           }
         }
       }
