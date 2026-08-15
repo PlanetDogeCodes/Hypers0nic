@@ -77,7 +77,6 @@ export function TabCloakPanel() {
         ))}
       </div>
 
-      {/* Custom title/icon for the classroom preset */}
       {tabCloak.preset === "classroom" && (
         <div className="space-y-3 rounded border border-border/20 bg-card/20 p-4">
           <p className="text-xs font-medium text-foreground">
@@ -113,7 +112,6 @@ export function TabCloakPanel() {
         </div>
       )}
 
-      {/* Custom title/icon for the custom preset */}
       {tabCloak.preset === "custom" && (
         <div className="space-y-3 rounded border border-border/20 bg-card/20 p-4">
           <p className="text-xs font-medium text-foreground">

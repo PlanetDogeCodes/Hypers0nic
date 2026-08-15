@@ -98,7 +98,6 @@ export function Calculator({ onClose }: { onClose?: () => void }) {
         )}
       </div>
 
-      {/* Display */}
       <div className="rounded-xl border border-border/40 bg-card/40 px-4 py-3 text-right">
         <div className="overflow-x-auto">
           <span className="text-3xl font-bold tabular-nums text-foreground">
@@ -112,7 +111,6 @@ export function Calculator({ onClose }: { onClose?: () => void }) {
         )}
       </div>
 
-      {/* Keypad */}
       <div className="grid grid-cols-4 gap-2">
         <button onClick={clear} className={cn(btnFn, "col-span-2 h-12")}>
           AC

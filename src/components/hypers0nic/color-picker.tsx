@@ -16,7 +16,7 @@ interface RGB {
 type Format = "hex" | "rgb" | "hsl";
 
 export function ColorPicker({ onClose }: { onClose?: () => void }) {
-  const [color, setColor] = useState("#7c3aed"); // default to Hypers0nic purple
+  const [color, setColor] = useState("#7c3aed");
   const [copied, setCopied] = useState<Format | null>(null);
 
   const rgb = hexToRgb(color);
@@ -58,7 +58,6 @@ export function ColorPicker({ onClose }: { onClose?: () => void }) {
         )}
       </div>
 
-      {/* Native color input + large preview */}
       <div className="flex items-center gap-3">
         <label
           className="relative size-20 shrink-0 cursor-pointer overflow-hidden rounded-xl border border-border/40 shadow-lg"
@@ -93,7 +92,6 @@ export function ColorPicker({ onClose }: { onClose?: () => void }) {
         </div>
       </div>
 
-      {/* Format cards — click to copy */}
       <div className="space-y-2">
         {formats.map(({ format, label, value }) => (
           <button
@@ -101,7 +99,6 @@ export function ColorPicker({ onClose }: { onClose?: () => void }) {
             onClick={() => copy(value, format)}
             className="flex w-full items-center gap-3 rounded-lg border border-border/40 bg-card/30 px-3 py-2.5 text-left transition-all hover:bg-card/60"
           >
-            {/* Color swatch */}
             <span
               className="size-8 shrink-0 rounded-md ring-1 ring-inset ring-white/10"
               style={{ backgroundColor: color }}
@@ -121,7 +118,6 @@ export function ColorPicker({ onClose }: { onClose?: () => void }) {
         ))}
       </div>
 
-      {/* Quick palette */}
       <div>
         <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
           Quick palette

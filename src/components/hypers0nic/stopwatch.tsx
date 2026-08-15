@@ -8,14 +8,13 @@ type StopwatchState = "idle" | "running" | "paused";
 
 export function Stopwatch({ onClose }: { onClose?: () => void }) {
   const [state, setState] = useState<StopwatchState>("idle");
-  const [elapsed, setElapsed] = useState(0); // milliseconds
+  const [elapsed, setElapsed] = useState(0);
   const rafRef = useRef<ReturnType<typeof requestAnimationFrame> | null>(null);
   const startRef = useRef<number>(0);
   const accumulatedRef = useRef<number>(0);
 
   const tickRef = useRef<() => void>(() => {});
-  // Assign the tick implementation inside an effect so we never mutate a ref
-  // during render (satisfies react-hooks/refs).
+
   useEffect(() => {
     tickRef.current = () => {
       setElapsed(accumulatedRef.current + (Date.now() - startRef.current));
@@ -73,7 +72,6 @@ export function Stopwatch({ onClose }: { onClose?: () => void }) {
         )}
       </div>
 
-      {/* Time display */}
       <div className="flex flex-col items-center gap-2 rounded-xl border border-border/40 bg-card/30 py-8">
         <Timer className="size-5 text-primary/60" />
         <div
@@ -93,7 +91,6 @@ export function Stopwatch({ onClose }: { onClose?: () => void }) {
         </div>
       </div>
 
-      {/* Controls */}
       <div className="flex items-center justify-center gap-2">
         {state === "idle" && (
           <button

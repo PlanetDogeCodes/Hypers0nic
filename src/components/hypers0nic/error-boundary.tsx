@@ -12,14 +12,6 @@ interface State {
   error: Error | null;
 }
 
-/**
- * App-level error boundary.
- *
- * Catches render errors in any child component and shows a fallback UI
- * instead of a white screen. The user can retry (which remounts the tree)
- * or go home. This is the safety net that prevents a single component
- * crash from taking down the entire Hypers0nic app.
- */
 export class ErrorBoundary extends Component<Props, State> {
   constructor(props: Props) {
     super(props);

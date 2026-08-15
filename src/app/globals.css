@@ -43,11 +43,6 @@
   --radius-xl: calc(var(--radius) + 4px);
 }
 
-/*
- * Hypers0nic default theme: pure black background, white monospace text,
- * white borders. Purple is used sparingly as an accent for interactive
- * elements. No gradients — flat, professional, terminal-inspired.
- */
 :root {
   --radius: 0.375rem;
   --background: #000000;
@@ -104,7 +99,6 @@
   }
 }
 
-/* Custom scrollbars — thin, white-tinted. */
 * {
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
@@ -124,12 +118,10 @@
   background-color: rgba(168, 85, 247, 0.5);
 }
 
-/* The proxied iframe should render at the site's own background. */
 iframe {
   color-scheme: auto;
 }
 
-/* Skeleton shimmer blocks for the proxy loading state. */
 .skeleton-block {
   background: linear-gradient(
     90deg,
@@ -156,7 +148,18 @@ iframe {
   }
 }
 
-/* Hide the header/proxy toolbar by default; reveal on hover near top. */
+@keyframes tab-loading-progress {
+  0% {
+    width: 0%;
+  }
+  100% {
+    width: 100%;
+  }
+}
+.tab-loading-bar {
+  animation: tab-loading-progress 3s linear infinite;
+}
+
 .hover-reveal {
   opacity: 0;
   transition: opacity 0.2s ease;

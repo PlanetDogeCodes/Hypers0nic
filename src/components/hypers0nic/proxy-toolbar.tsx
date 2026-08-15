@@ -37,8 +37,7 @@ export function ProxyToolbar({
   const bookmarks = useHypers0nic((s) => s.bookmarks);
   const toggleBookmark = useHypers0nic((s) => s.toggleBookmark);
   const topBarAlwaysVisible = useHypers0nic((s) => s.settings.preferences.topBarAlwaysVisible);
-  // When 2+ proxy tabs are open, the TabBar is rendered above the toolbar.
-  // Shift the toolbar down by 2rem (top-8) to make room.
+
   const tabCount = useHypers0nic((s) => s.tabs.length);
   const hasTabBar = tabCount >= 1;
   const [visible, setVisible] = useState(topBarAlwaysVisible);
@@ -47,7 +46,6 @@ export function ProxyToolbar({
     setVisible(topBarAlwaysVisible);
   }, [topBarAlwaysVisible]);
 
-  // Reveal the toolbar when the mouse moves near the top of the screen.
   useEffect(() => {
     if (topBarAlwaysVisible) return;
     const handler = (e: MouseEvent) => {
@@ -81,7 +79,6 @@ export function ProxyToolbar({
 
   return (
     <>
-      {/* Invisible hover zone — only needed when auto-hidden */}
       {!topBarAlwaysVisible && (
         <div className={cn("fixed left-0 right-0 top-0 z-40 h-10", hasTabBar && "top-8")} onMouseEnter={() => setVisible(true)} />
       )}
@@ -94,9 +91,6 @@ export function ProxyToolbar({
           visible ? "translate-y-0" : "-translate-y-full"
         )}
       >
-        {/* Loading progress bar — CSS transition instead of motion.div to
-            avoid the removeChild error that occurs when AnimatePresence
-            tries to unmount during rapid navigation. */}
         <div
           className={cn(
             "absolute bottom-0 left-0 right-0 h-0.5 origin-left bg-primary transition-all duration-300",
@@ -105,7 +99,6 @@ export function ProxyToolbar({
         />
 
         <div className="flex items-center gap-2 px-3 py-2">
-          {/* Navigation zone */}
           <div className="flex items-center gap-0.5">
             <TooltipProvider delayDuration={400}>
               <Tooltip>
@@ -151,7 +144,6 @@ export function ProxyToolbar({
             </TooltipProvider>
           </div>
 
-          {/* URL zone */}
           <div className="flex flex-1 items-center gap-2">
             {hostname && (
               <div
@@ -172,7 +164,6 @@ export function ProxyToolbar({
               <Omnibox variant="toolbar" />
             </div>
 
-            {/* Bookmark toggle */}
             {hostname && (
               <button
                 onClick={() => toggleBookmark(omniboxValue, hostname)}
@@ -188,7 +179,6 @@ export function ProxyToolbar({
               </button>
             )}
 
-            {/* Connection status */}
             <div
               className={cn(
                 "hidden shrink-0 items-center gap-1.5 rounded border px-2 py-1 text-xs font-medium md:flex",

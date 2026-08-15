@@ -24,6 +24,7 @@ export function AppShell() {
   const tabCloak = useHypers0nic((s) => s.settings.tabCloak);
   const topBarAlwaysVisible = useHypers0nic((s) => s.settings.preferences.topBarAlwaysVisible);
   const tabCount = useHypers0nic((s) => s.tabs.length);
+  const activeTabId = useHypers0nic((s) => s.activeTabId);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -57,8 +58,6 @@ export function AppShell() {
     }
   }, [tabCloak.enabled, tabCloak.preset, tabCloak.customTitle, tabCloak.customIcon]);
 
-  // The tab bar appears above the header whenever there's at least 1 tab.
-  // Both the header/toolbar and the page content need to be pushed down.
   const hasTabBar = tabCount >= 1;
 
   useKeyboardShortcuts({
@@ -85,14 +84,15 @@ export function AppShell() {
         onOpenTinf0il={() => setTinf0ilOpen(true)}
         onOpenCookies={() => setCookiesOpen(true)}
       />
-      {/* When the top bar is always visible, push content down by its height.
-          If the tab bar is also visible, add another 2rem (h-8) for it. */}
       <div className={(topBarAlwaysVisible ? "pt-12 " : "") + (hasTabBar ? "pt-8" : "")}>
         <main className="flex min-h-[calc(100vh-3rem)] flex-col">
           {view === "home" ? (
             <HomeView onOpenHistory={() => setHistoryOpen(true)} />
           ) : (
-            <ProxyFrame />
+
+            <div key={activeTabId ?? "home"} className="transition-opacity duration-200">
+              <ProxyFrame />
+            </div>
           )}
         </main>
         {view === "home" && <Footer />}

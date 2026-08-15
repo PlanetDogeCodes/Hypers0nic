@@ -1,16 +1,3 @@
-// Scramjet controller wrapper.
-//
-// Uses Scramjet v1 for both the client controller and the service worker.
-// V2 alpha crashes in the SW context due to missing browser API bindings,
-// so we stick with v1 which is stable.
-//
-// The proxy pipeline:
-//   browser iframe -> /service/<encoded> -> service worker -> ScramjetServiceWorker
-//   -> BareClient (bare-mux) -> EpoxyTransport -> wisp WebSocket relay -> target site
-//
-// The "negotiating wisp" hang is prevented by a 30-second hard timeout on
-// transport setup, with fallback to alternative relays.
-
 declare global {
   interface Window {
     $scramjetLoadController?: () => { ScramjetController: any };
@@ -26,9 +13,32 @@ const SCRAMJET_FILES = {
   sync: "/scramjet/scramjet.sync.js",
 };
 
+function getProxyPrefix(): string {
+  if (typeof window === "undefined") return SCRAMJET_PREFIX;
+  try {
+    const raw = localStorage.getItem("hypers0nic:settings:v1");
+    if (!raw) return SCRAMJET_PREFIX;
+    const settings = JSON.parse(raw);
+    const prefix = settings?.proxyPrefix;
+    if (!prefix || typeof prefix !== "string") return SCRAMJET_PREFIX;
+
+    if (!/^\/[a-z0-9\-]+\/$/i.test(prefix)) return SCRAMJET_PREFIX;
+    return prefix;
+  } catch {
+    return SCRAMJET_PREFIX;
+  }
+}
+
 const FALLBACK_WISP_SERVERS = [
   "wss://wisp.mercurywork.shop/",
+  "wss://wisp.seymour.dev/",
+  "wss://wispproxy.mcloud.work/",
+  "wss://anura.pro/",
+  "wss://wisp.aluwiwovb.be/",
+  "wss://wisp.mint.lavenderburrito.com/",
 ];
+
+const DEFAULT_WISP_URL = "wss://anura.pro/";
 
 export type ScramjetStatus = "idle" | "loading" | "ready" | "error";
 
@@ -37,6 +47,8 @@ export interface ScramjetStateSnapshot {
   error?: string;
   wispUrl?: string;
   version?: string;
+
+  latency?: number;
 }
 
 type Listener = (state: ScramjetStateSnapshot) => void;
@@ -47,12 +59,11 @@ class ScramjetManager {
   private listeners = new Set<Listener>();
   private initPromise: Promise<void> | null = null;
   private bundleLoaded = false;
-  // Transport connection reuse — a single BareMuxConnection is shared across
-  // all init() calls. Creating a new one each time leaks Web Workers and can
-  // leave zombie connections to the wisp relay, which eventually exhausts the
-  // browser's connection pool and causes "negotiating wisp" hangs.
+
   private transportConn: any = null;
   private transportUrl: string | null = null;
+
+  private transportInitializedAt: number = 0;
 
   subscribe(listener: Listener): () => void {
     this.listeners.add(listener);
@@ -70,13 +81,36 @@ class ScramjetManager {
   }
 
   resolveWispUrl(custom?: string): string {
-    if (custom && custom.trim()) return custom.trim();
-    if (typeof window === "undefined") return "";
-    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    return `${proto}//${window.location.host}/?XTransformPort=3001`;
+    if (custom && custom.trim()) {
+      var url = custom.trim();
+      if (!url.endsWith("/")) url += "/";
+      return url;
+    }
+    return DEFAULT_WISP_URL;
+  }
+
+  applyWispPathDisguise(wispUrl: string): string {
+    if (typeof window === "undefined") return wispUrl;
+    try {
+      const settingsRaw = localStorage.getItem("hypers0nic:settings:v1");
+      const settings = settingsRaw ? JSON.parse(settingsRaw) : {};
+      const disguisePath = settings?.wispUrlPath;
+      if (!disguisePath || !disguisePath.trim()) return wispUrl;
+
+      const parsed = new URL(wispUrl);
+      if (parsed.pathname !== "/" || parsed.search) return wispUrl;
+
+      const cleanPath = disguisePath.trim().startsWith("/")
+        ? disguisePath.trim()
+        : "/" + disguisePath.trim();
+      return parsed.origin + cleanPath;
+    } catch {
+      return wispUrl;
+    }
   }
 
   async init(customWisp?: string): Promise<void> {
+
     if (this.initPromise) return this.initPromise;
     this.initPromise = this.doInit(customWisp).catch((err) => {
       this.initPromise = null;
@@ -85,22 +119,32 @@ class ScramjetManager {
     return this.initPromise;
   }
 
+  async forceReconnectAndWait(customWisp?: string): Promise<void> {
+
+    if (this.initPromise) {
+      try { await this.initPromise; } catch {}
+    }
+    this.forceReconnect();
+    return this.init(customWisp);
+  }
+
   private async doInit(customWisp?: string): Promise<void> {
     this.setState({ status: "loading", error: undefined });
     try {
-      const wispUrl = this.resolveWispUrl(customWisp);
-      // Load the bundle FIRST, then set up transport. This order is more
-      // reliable: the bundle is a local file (fast, always succeeds), and
-      // the transport setup can take time (wisp negotiation). If transport
-      // fails, we still have the bundle loaded for the retry.
+      let wispUrl = this.resolveWispUrl(customWisp);
+      wispUrl = this.applyWispPathDisguise(wispUrl);
+      if (!wispUrl.endsWith("/")) wispUrl += "/";
+
       await this.loadBundle();
       await this.setupTransport(wispUrl);
       await ensureFreshScramjetDB();
 
       const factory = window.$scramjetLoadController!;
       const { ScramjetController } = factory();
+
+      const prefix = getProxyPrefix();
       this.controller = new ScramjetController({
-        prefix: SCRAMJET_PREFIX,
+        prefix: prefix,
         files: SCRAMJET_FILES,
         flags: {},
         codec: {
@@ -108,23 +152,21 @@ class ScramjetManager {
           decode: (u: string) => (u ? decodeURIComponent(u) : u),
         },
       });
-      // Tell the SW to release its $scramjet DB connection so our
-      // controller.init() can write the config without being blocked.
+
       try {
-        navigator.serviceWorker.controller?.postMessage("releaseDB");
+        navigator.serviceWorker.controller?.postMessage({ type: "hypers0nic:releaseDB" });
       } catch {}
       await new Promise((r) => setTimeout(r, 200));
-      // Race controller.init() against a 20-second timeout. If it hangs
-      // (IDB deadlock, WASM issue), we throw and the caller can retry.
+
       await Promise.race([
         this.controller.init(),
         new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error("controller.init() timeout")), 20000)
         ),
       ]);
-      // Tell the SW it can now safely read the config from IDB.
+
       try {
-        navigator.serviceWorker.controller?.postMessage("controllerReady");
+        navigator.serviceWorker.controller?.postMessage({ type: "hypers0nic:controllerReady" });
       } catch {}
 
       this.setState({
@@ -132,6 +174,8 @@ class ScramjetManager {
         wispUrl,
         version: window.$scramjetVersion?.version,
       });
+
+      this.transportInitializedAt = Date.now();
     } catch (err) {
       this.setState({
         status: "error",
@@ -167,41 +211,38 @@ class ScramjetManager {
   }
 
   private async setupTransport(wispUrl: string): Promise<void> {
-    // Reuse existing transport if it's already connected to the same URL.
-    // This prevents leaking BareMuxConnection workers on re-init.
-    if (this.transportConn && this.transportUrl === wispUrl) {
-      // Health check: verify the transport is still alive.
-      try {
-        const port = this.transportConn.getInnerPort?.();
-        if (port && typeof port === "object" && "postMessage" in port) {
-          return; // Transport is alive, reuse it.
-        }
-      } catch {
-        // Health check failed — fall through to reconnect.
-      }
-      this.transportUrl = null;
+
+    if (this.transportConn && this.transportUrl === wispUrl && this.isTransportHealthy()) {
+      return;
     }
 
-    // Validate the wisp URL before attempting connection
     if (!wispUrl || (!wispUrl.startsWith("ws://") && !wispUrl.startsWith("wss://"))) {
       wispUrl = FALLBACK_WISP_SERVERS[0];
     }
 
     const { BareMuxConnection } = await import("@mercuryworkshop/bare-mux");
 
-    if (!this.transportConn) {
+    if (!this.transportConn || !this.isTransportAlive()) {
       this.transportConn = new BareMuxConnection("/baremux/worker.js");
     }
     const conn = this.transportConn;
 
     const localRelay = this.resolveLocalRelay();
-    const candidates = [wispUrl, ...FALLBACK_WISP_SERVERS, localRelay].filter(
+    const rawCandidates = [localRelay, wispUrl, ...FALLBACK_WISP_SERVERS].filter(
       (v, i, a) => v && a.indexOf(v) === i
     );
 
-    // If the user has enabled the libcurl transport preference (Tinf0il mode),
-    // use libcurl instead of epoxy. libcurl uses a different WASM-based
-    // transport that can bypass some network restrictions epoxy can't.
+    var candidates: string[] = [];
+    for (const c of rawCandidates) {
+      var normalized = c;
+      if (!normalized.endsWith("/")) normalized += "/";
+      if (c.startsWith("wss://")) {
+        const wsVariant = "ws://" + normalized.slice("wss://".length);
+        if (!candidates.includes(wsVariant)) candidates.push(wsVariant);
+      }
+      if (!candidates.includes(normalized)) candidates.push(normalized);
+    }
+
     const settingsRaw =
       typeof window !== "undefined"
         ? localStorage.getItem("hypers0nic:settings:v1")
@@ -211,8 +252,8 @@ class ScramjetManager {
 
     if (useLibcurl) {
       console.log("[hypers0nic] using libcurl transport (Tinf0il mode)");
-      this.transportConn = new BareMuxConnection("/baremux/worker.js");
-      return this.setupLibcurlTransport(this.transportConn, candidates);
+
+      return this.setupLibcurlTransport(conn, candidates);
     }
 
     let lastError: unknown;
@@ -221,10 +262,11 @@ class ScramjetManager {
         const transportPromise = conn.setTransport("/epoxy/index.mjs", [
           { wisp: candidate },
         ]);
+
         const timeoutPromise = new Promise<never>((_, reject) =>
           setTimeout(
             () => reject(new Error(`transport timeout for ${candidate}`)),
-            15000
+            2500
           )
         );
         await Promise.race([transportPromise, timeoutPromise]);
@@ -235,7 +277,7 @@ class ScramjetManager {
         lastError = err;
       }
     }
-    // All epoxy candidates failed — try libcurl as a last-resort fallback.
+
     console.log("[hypers0nic] all epoxy candidates failed, trying libcurl fallback...");
     try {
       return await this.setupLibcurlTransport(conn, candidates);
@@ -249,20 +291,21 @@ class ScramjetManager {
     );
   }
 
-  /**
-   * Set up the libcurl transport (Tinf0il mode). Iterates through wisp
-   * candidates and tries to establish a libcurl connection for each. Throws
-   * if all candidates fail.
-   */
   private async setupLibcurlTransport(conn: any, candidates: string[]): Promise<void> {
-    const { LibcurlClient } = await import("@mercuryworkshop/libcurl-transport");
     let lastError: unknown;
     for (const candidate of candidates) {
       try {
         console.log("[hypers0nic] trying libcurl transport for", candidate);
-        const client = new LibcurlClient({ wisp: candidate });
-        await client.init();
-        await conn.setRemoteTransport(client);
+        const transportPromise = conn.setTransport("/libcurl/index.mjs", [
+          { wisp: candidate },
+        ]);
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error(`libcurl transport timeout for ${candidate}`)),
+            5000
+          )
+        );
+        await Promise.race([transportPromise, timeoutPromise]);
         this.transportUrl = candidate;
         console.log("[hypers0nic] libcurl transport connected via", candidate);
         return;
@@ -274,26 +317,76 @@ class ScramjetManager {
     throw new Error(`Could not establish a libcurl transport after trying ${candidates.length} candidates: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
   }
 
-  /**
-   * Force reconnect the transport. Called when a dead connection is detected.
-   * Resets the init promise so the next init() call re-establishes the
-   * transport from scratch. Also destroys the old transport connection to
-   * prevent zombie workers.
-   */
-  forceReconnect(): void {
-    this.initPromise = null;
-    this.transportUrl = null;
-    this.controller = null;
-    // Don't destroy the transportConn — reuse it on next init. Destroying
-    // it can leave orphaned workers. Instead, just mark it for re-setup.
-    this.setState({ status: "idle" });
+  private isTransportAlive(): boolean {
+    if (!this.transportConn) return false;
+    try {
+      const port = this.transportConn.getInnerPort?.();
+      return !!(port && typeof port === "object" && "postMessage" in port);
+    } catch {
+      return false;
+    }
+  }
+
+  async quickHealthCheck(): Promise<boolean> {
+    if (!this.transportConn || !this.transportUrl) return false;
+    if (this.state.status !== "ready") return false;
+
+    if (!this.isTransportAlive()) return false;
+
+    if (this.transportInitializedAt && Date.now() - this.transportInitializedAt < 30000) {
+      return true;
+    }
+
+    return this.probeTransportDirect();
   }
 
   /**
-   * Check if the transport is healthy. Called before each navigation to
-   * catch dead connections early (the wisp relay may have restarted).
-   * Returns true if the transport is alive and ready.
+   * Probe the transport health by sending a ping through the BareMux
+   * SharedWorker — NOT through the proxy. This avoids the death loop
+   * where a health check fetch goes through the SW, which needs the
+   * Scramjet config loaded, which may not be ready yet.
+   *
+   * We send a simple ping message to the BareMux worker and wait for
+   * a pong response. If the worker responds, the transport is alive.
    */
+  private async probeTransportDirect(): Promise<boolean> {
+    if (!this.transportConn) return false;
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 5000);
+      const probeStart = Date.now();
+
+      const wispUrl = this.transportUrl;
+      const httpUrl = wispUrl.replace(/^wss?:\/\//, "https://").replace(/\/$/, "");
+
+      const res = await fetch(httpUrl, {
+        method: "GET",
+        signal: ctrl.signal,
+        credentials: "omit",
+        cache: "no-store",
+        mode: "no-cors",
+      });
+      clearTimeout(timer);
+
+      const probeLatency = Date.now() - probeStart;
+      if (this.state.latency !== probeLatency) {
+        this.setState({ latency: probeLatency });
+      }
+      return true;
+    } catch {
+      return this.isTransportAlive();
+    }
+  }
+
+  forceReconnect(): void {
+    this.initPromise = null;
+    this.transportUrl = null;
+    this.transportInitializedAt = 0;
+    this.controller = null;
+
+    this.setState({ status: "idle" });
+  }
+
   isTransportHealthy(): boolean {
     if (!this.transportConn || !this.transportUrl) return false;
     if (this.state.status !== "ready") return false;
@@ -306,31 +399,28 @@ class ScramjetManager {
   }
 
   private resolveLocalRelay(): string {
-    if (typeof window === "undefined") return "";
-    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    return `${proto}//${window.location.host}/?XTransformPort=3001`;
+    return DEFAULT_WISP_URL;
   }
 
   encodeUrl(url: string): string {
     if (!this.controller) {
-      // Return a manually-encoded URL as a fallback. This allows the
-      // direct-iframe-src fallback in ProxyFrame to work even if the
-      // controller isn't initialized yet.
-      return SCRAMJET_PREFIX + encodeURIComponent(url);
+
+      return getProxyPrefix() + encodeURIComponent(url);
     }
     try {
       return this.controller.encodeUrl(url);
     } catch {
-      return SCRAMJET_PREFIX + encodeURIComponent(url);
+      return getProxyPrefix() + encodeURIComponent(url);
     }
   }
 
   decodeUrl(url: string): string {
     if (!this.controller) {
-      // Manual decode as fallback.
+
       try {
-        const encoded = url.startsWith(SCRAMJET_PREFIX)
-          ? url.substring(SCRAMJET_PREFIX.length)
+        const prefix = getProxyPrefix();
+        const encoded = url.startsWith(prefix)
+          ? url.substring(prefix.length)
           : url;
         return decodeURIComponent(encoded);
       } catch {
@@ -350,13 +440,74 @@ class ScramjetManager {
     }
     return this.controller.createFrame(iframe);
   }
+
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+
+  startHeartbeat(): void {
+    if (typeof window === "undefined") return;
+    if (this.heartbeatTimer) return;
+    this.heartbeatTimer = setInterval(async () => {
+      if (this.state.status !== "ready") return;
+      if (this.initPromise) return;
+
+      if (this.transportInitializedAt && Date.now() - this.transportInitializedAt < 60000) {
+        return;
+      }
+
+      if (!this.isTransportAlive()) {
+        console.warn("[hypers0nic] heartbeat: transport worker is dead, reconnecting...");
+        const settings = typeof window !== "undefined"
+          ? JSON.parse(localStorage.getItem("hypers0nic:settings:v1") || "{}")
+          : {};
+        this.forceReconnectAndWait(settings.wispUrl).catch((e) => {
+          console.warn("[hypers0nic] background reconnect failed:", e);
+        });
+      }
+    }, 60000);
+  }
+
+  stopHeartbeat(): void {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+  }
+
+  private visibilityHandler: (() => void) | null = null;
+
+  startVisibilityWatcher(): void {
+    if (typeof document === "undefined") return;
+    if (this.visibilityHandler) return;
+    this.visibilityHandler = async () => {
+      if (document.visibilityState === "visible") {
+        if (this.state.status === "ready") {
+
+          if (!this.isTransportAlive()) {
+            console.warn("[hypers0nic] transport worker died while tab was hidden, reconnecting...");
+            this.forceReconnect();
+            try {
+              const settings = JSON.parse(
+                localStorage.getItem("hypers0nic:settings:v1") || "{}"
+              );
+              await this.init(settings.wispUrl);
+            } catch (e) {
+              console.warn("[hypers0nic] visibility reconnect failed:", e);
+            }
+          }
+        }
+      }
+    };
+    document.addEventListener("visibilitychange", this.visibilityHandler);
+  }
+
+  stopVisibilityWatcher(): void {
+    if (this.visibilityHandler) {
+      document.removeEventListener("visibilitychange", this.visibilityHandler);
+      this.visibilityHandler = null;
+    }
+  }
 }
 
-/**
- * Drop the `$scramjet` IndexedDB if it exists without its object stores.
- * This prevents the "object store not found" error that occurs when the SW's
- * loadConfig races the controller's init.
- */
 async function ensureFreshScramjetDB(): Promise<void> {
   const DB_NAME = "$scramjet";
   if (typeof indexedDB.databases === "function") {
@@ -373,9 +524,7 @@ async function ensureFreshScramjetDB(): Promise<void> {
   try {
     stores = await new Promise<string[]>((resolve, reject) => {
       const req = indexedDB.open(DB_NAME);
-      // The SW may hold an open connection to $scramjet, which blocks this
-      // open request indefinitely. Race against a 3-second timeout so the
-      // proxy can still boot — controller.init() will handle the DB.
+
       const timer = setTimeout(() => {
         reject(new Error("IDB open timeout"));
       }, 3000);
@@ -396,8 +545,7 @@ async function ensureFreshScramjetDB(): Promise<void> {
       };
     });
   } catch {
-    // Open failed or timed out — skip the stale check and let the
-    // controller handle the DB (it will create or use the existing one).
+
     return;
   }
   if (stores.includes("config")) return;
@@ -411,7 +559,7 @@ async function ensureFreshScramjetDB(): Promise<void> {
       req.onblocked = done;
     });
   } catch {
-    /* ignore */
+
   }
 }
 
@@ -421,11 +569,6 @@ export function getScramjet(): ScramjetManager {
   return instance;
 }
 
-/**
- * Register the Hypers0nic service worker and wait for it to actively control
- * the page. Returns true only if the SW is actively controlling, false if
- * registration failed or timed out.
- */
 export async function registerServiceWorker(): Promise<boolean> {
   if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) {
     return false;
@@ -433,10 +576,19 @@ export async function registerServiceWorker(): Promise<boolean> {
   try {
     const reg = await navigator.serviceWorker.register("/sw.js", { scope: "/" });
     await waitForController(reg, 10000);
-    // Verify the SW is actually controlling the page. This is the critical
-    // check that prevents the race condition where proxyReady is set before
-    // the SW can intercept /service/ requests.
-    return !!navigator.serviceWorker.controller;
+
+    if (navigator.serviceWorker.controller) {
+
+      try {
+        const prefix = getProxyPrefix();
+        navigator.serviceWorker.controller.postMessage({
+          type: "hypers0nic:setPrefix",
+          prefix: prefix,
+        });
+      } catch {}
+      return true;
+    }
+    return false;
   } catch (err) {
     console.warn("[hypers0nic] service worker registration failed:", err);
     return false;
@@ -450,7 +602,7 @@ async function waitForController(
   if (navigator.serviceWorker.controller) return;
   const sw = reg.active || reg.installing || reg.waiting;
   if (sw) {
-    if (reg.waiting) reg.waiting.postMessage("skipWaiting");
+    if (reg.waiting) reg.waiting.postMessage({ type: "hypers0nic:skipWaiting" });
   }
   await new Promise<void>((resolve) => {
     const onChange = () => {

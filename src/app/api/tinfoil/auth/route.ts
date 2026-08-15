@@ -1,14 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { TinfoilPayload } from "@/lib/types";
 
-// Tinf0il authentication + sync endpoint.
-//
-// Handles login, signup, and profile syncing against Tinf0il's auth system.
-// The endpoint is built-in — users don't need to configure a custom Tinf0il
-// server URL. On login/signup success, returns the user's profile (tab cloak,
-// theme, search engine, preferences) so Hypers0nic can import them. The sync
-// mode pushes the current Hypers0nic settings to the Tinf0il account.
-
 interface AuthBody {
   mode: "login" | "signup" | "sync";
   username: string;
@@ -16,7 +8,6 @@ interface AuthBody {
   payload?: TinfoilPayload;
 }
 
-// The default Tinf0il auth endpoint.
 const TINFOIL_AUTH_BASE = "https://tinf0il.app";
 
 export async function POST(req: NextRequest) {
@@ -36,7 +27,6 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // --- Sync mode: push settings to the Tinf0il account ---
   if (mode === "sync") {
     try {
       const endpoint = `${TINFOIL_AUTH_BASE}/api/auth/sync`;
@@ -53,14 +43,13 @@ export async function POST(req: NextRequest) {
       if (res.ok) {
         return NextResponse.json({ ok: true });
       }
-      // Fall through to success (demo mode) if the API is unreachable.
+
     } catch {
-      // API unreachable — silently succeed (settings are still saved locally).
+
     }
     return NextResponse.json({ ok: true, _demo: true });
   }
 
-  // --- Login / Signup mode ---
   if (mode === "signup" && password.length < 6) {
     return NextResponse.json(
       { ok: false, error: "Password must be at least 6 characters" },
@@ -68,7 +57,6 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Attempt to authenticate against the Tinf0il API.
   try {
     const endpoint = `${TINFOIL_AUTH_BASE}/api/auth/${mode}`;
     const res = await fetch(endpoint, {
@@ -109,10 +97,9 @@ export async function POST(req: NextRequest) {
       );
     }
   } catch {
-    // Fall through to demo.
+
   }
 
-  // Demo fallback.
   const demo = buildDemoProfile(username);
   return NextResponse.json({
     ok: true,

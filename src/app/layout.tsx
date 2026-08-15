@@ -44,21 +44,26 @@ export default function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <body
         className={`${geistMono.variable} antialiased bg-background text-foreground`}
-        // suppressHydrationWarning: browser extensions (ProtonPass, Grammarly,
-        // etc.) inject attributes like data-protonpass-form onto the body
-        // before React hydrates, causing hydration mismatch warnings in dev.
-        // This is harmless and expected — the warning is suppressed so it
-        // doesn't clutter the console.
+
         suppressHydrationWarning
       >
-        {/* Preload critical proxy assets for faster first navigation.
-            The Scramjet WASM (~500KB) and JS bundle are needed before any
-            page can be proxied. Preloading them in parallel with the page
-            load shaves ~200-400ms off the first navigation. */}
         <link rel="preload" href="/scramjet/scramjet.all.js" as="script" />
         <link rel="preload" href="/scramjet/scramjet.wasm.wasm" as="fetch" crossOrigin="anonymous" />
         <link rel="preload" href="/baremux/worker.js" as="script" />
         <link rel="preload" href="/epoxy/index.mjs" as="script" />
+        <link rel="modulepreload" href="/scramjet/scramjet.all.js" />
+        <link rel="modulepreload" href="/baremux/worker.js" />
+        <link rel="preconnect" href="https://anura.pro" />
+        <link rel="preconnect" href="https://wisp.mercurywork.shop" />
+        <link rel="preconnect" href="https://wisp.seymour.dev" />
+        <link rel="preconnect" href="https://wispproxy.mcloud.work" />
+        <link rel="preconnect" href="https://wisp.aluwiwovb.be" />
+        <link rel="preconnect" href="https://wisp.mint.lavenderburrito.com" />
+        <link rel="dns-prefetch" href="https://duckduckgo.com" />
+        <link rel="dns-prefetch" href="https://google.com" />
+        <link rel="dns-prefetch" href="https://suggestqueries.google.com" />
+        <link rel="dns-prefetch" href="https://api.bing.com" />
+        <link rel="dns-prefetch" href="https://search.brave.com" />
         {children}
         <Toaster />
         <SonnerToaster

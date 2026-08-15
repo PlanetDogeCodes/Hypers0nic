@@ -6,15 +6,6 @@ import { useHypers0nic } from "@/store/hypers0nic";
 import { getScramjet } from "@/lib/scramjet";
 import { cn } from "@/lib/utils";
 
-/**
- * TabBar — terminal-aesthetic strip shown above the header when there are
- * 2 or more proxy tabs open. Supports drag-to-reorder (HTML5 DnD), per-tab
- * close buttons, and a "+" button to go home and open a new tab.
- *
- * Layout: fixed at the very top of the viewport (z-60). Each tab is a
- * shrinkable pill with a favicon (proxied through the SW), a truncated
- * title, and a close button. The active tab is highlighted in purple.
- */
 export function TabBar() {
   const tabs = useHypers0nic((s) => s.tabs);
   const activeTabId = useHypers0nic((s) => s.activeTabId);
@@ -33,10 +24,7 @@ export function TabBar() {
     (url: string): string => {
       try {
         const u = new URL(url);
-        // Use Google's favicon service through the proxy if the controller is
-        // ready. Otherwise fall back to a direct (uncloaked) favicon fetch —
-        // better than showing nothing on the very first load before the SW
-        // is up.
+
         const favUrl = `https://www.google.com/s2/favicons?domain=${u.hostname}&sz=32`;
         const sj = getScramjet();
         if (sj && sj.getState().status === "ready") {
@@ -50,10 +38,6 @@ export function TabBar() {
     [scramjet.status]
   );
 
-  // Always render the tab bar when there's at least 1 tab. Even with a
-  // single tab, the bar shows the current site and the "+" button to go home.
-  // When the last tab is closed, the store sends the user to the home page
-  // and the tab bar disappears (0 tabs).
   if (tabs.length === 0) return null;
 
   const handleDragStart = (e: React.DragEvent, index: number) => {
@@ -63,7 +47,7 @@ export function TabBar() {
     try {
       e.dataTransfer.setData("text/plain", String(index));
     } catch {
-      /* some browsers throw if drag data is empty */
+
     }
   };
 
@@ -92,6 +76,24 @@ export function TabBar() {
     setDragIndex(null);
     dragIndexRef.current = null;
   };
+
+  const connStatus = scramjet.status;
+  const connDotClass =
+    connStatus === "ready"
+      ? "bg-emerald-500"
+      : connStatus === "loading"
+      ? "bg-amber-400"
+      : connStatus === "error"
+      ? "bg-red-500"
+      : "bg-muted-foreground/60";
+  const connTitle =
+    connStatus === "ready"
+      ? "Proxy connected"
+      : connStatus === "loading"
+      ? "Connecting…"
+      : connStatus === "error"
+      ? `Connection error${scramjet.error ? ": " + scramjet.error : ""}`
+      : "Proxy idle";
 
   return (
     <div
@@ -129,7 +131,7 @@ export function TabBar() {
             }}
             onClick={() => switchTab(tab.id)}
             className={cn(
-              "group relative flex h-6 min-w-0 max-w-[14rem] shrink cursor-pointer items-center gap-1.5 rounded-md border px-2 text-xs transition-all",
+              "group relative flex h-6 min-w-0 max-w-[14rem] shrink cursor-pointer items-center gap-1.5 rounded-md border px-2 text-xs transition-all duration-150",
               "font-mono",
               isActive
                 ? "border-primary/60 bg-primary/10 text-primary"
@@ -139,7 +141,6 @@ export function TabBar() {
             )}
             title={tab.title || tab.url}
           >
-            {/* Favicon */}
             <span className="flex size-3.5 shrink-0 items-center justify-center">
               {isLoading ? (
                 <Globe className="size-3 animate-pulse text-primary" />
@@ -150,7 +151,7 @@ export function TabBar() {
                   className="size-3.5 rounded-sm object-contain"
                   loading="lazy"
                   onError={(e) => {
-                    // Hide broken favicons — fall back to a globe icon.
+
                     (e.currentTarget as HTMLImageElement).style.display = "none";
                   }}
                 />
@@ -159,12 +160,10 @@ export function TabBar() {
               )}
             </span>
 
-            {/* Title — truncated with ellipsis */}
             <span className="truncate">
               {tab.title || tab.url}
             </span>
 
-            {/* Close button */}
             <button
               type="button"
               onClick={(e) => {
@@ -182,11 +181,17 @@ export function TabBar() {
             >
               <X className="size-3" />
             </button>
+
+            {isLoading && (
+              <span
+                className="tab-loading-bar pointer-events-none absolute bottom-0 left-0 h-0.5 bg-[#a855f7]"
+                aria-hidden="true"
+              />
+            )}
           </div>
         );
       })}
 
-      {/* "+" button — go home to open a new tab */}
       <button
         type="button"
         onClick={goHome}
@@ -196,6 +201,17 @@ export function TabBar() {
       >
         <Plus className="size-3.5" />
       </button>
+
+      <span
+        className={cn(
+          "ml-auto size-2 shrink-0 rounded-full transition-colors",
+          connDotClass,
+          connStatus === "loading" && "animate-pulse"
+        )}
+        role="status"
+        aria-label={connTitle}
+        title={connTitle}
+      />
     </div>
   );
 }

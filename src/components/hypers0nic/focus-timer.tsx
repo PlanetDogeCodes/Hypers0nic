@@ -120,7 +120,6 @@ export function FocusTimer() {
 
   return (
     <div className="relative flex flex-col items-center">
-      {/* Duration picker */}
       <AnimatePresence>
         {state === "idle" && (
           <motion.div
@@ -153,7 +152,6 @@ export function FocusTimer() {
         )}
       </AnimatePresence>
 
-      {/* Session counter + streak */}
       <AnimatePresence>
         {state === "idle" && todaySessionCount > 0 && (
           <motion.div
@@ -186,7 +184,6 @@ export function FocusTimer() {
         )}
       </AnimatePresence>
 
-      {/* Clock / timer */}
       <div className="relative flex size-72 items-center justify-center sm:size-80">
         <AnimatePresence>
           {isActive && (
@@ -325,6 +322,6 @@ function playBeep(freq: number, duration: number) {
     osc.start();
     osc.stop(ctx.currentTime + duration);
   } catch {
-    /* audio not available */
+
   }
 }

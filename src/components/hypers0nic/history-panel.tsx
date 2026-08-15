@@ -64,7 +64,6 @@ export function HistoryPanel({
     );
   }, [history, query]);
 
-  // Group by day for a cleaner list.
   const grouped = useMemo(() => {
     const groups: { label: string; items: typeof filtered }[] = [];
     let lastLabel = "";

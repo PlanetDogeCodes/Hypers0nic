@@ -24,14 +24,6 @@ interface CookieEntry {
   httponly: boolean;
 }
 
-/**
- * Cookie manager dialog.
- *
- * Reads cookies from the Scramjet IndexedDB ($scramjet / cookies store) and
- * lets the user view, search, and delete them. This is essential for managing
- * session auth — users can inspect what cookies a proxied site has set,
- * clear them to reset a session, or verify that login cookies are present.
- */
 export function CookieManager({
   open,
   onOpenChange,
@@ -46,7 +38,7 @@ export function CookieManager({
   const loadCookies = useCallback(async () => {
     setLoading(true);
     try {
-      // Read from the $scramjet IndexedDB cookies object store
+
       const dbPromise = new Promise<CookieEntry[]>((resolve) => {
         const DB_NAME = "$scramjet";
         const req = indexedDB.open(DB_NAME);
@@ -66,7 +58,7 @@ export function CookieManager({
               const entries: CookieEntry[] = [];
               const results = getAll.result || [];
               for (const row of results) {
-                // The cookies store uses domain as key, value is an array of cookie objects
+
                 if (Array.isArray(row)) {
                   for (const c of row) {
                     if (c && typeof c === "object") {
@@ -82,7 +74,7 @@ export function CookieManager({
                     }
                   }
                 } else if (row && typeof row === "object") {
-                  // Single cookie object
+
                   if (row.cookies && Array.isArray(row.cookies)) {
                     for (const c of row.cookies) {
                       entries.push({

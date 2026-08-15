@@ -46,50 +46,36 @@ import {
 import { getSearchEngine, normalizeInput } from "@/lib/search-engines";
 
 interface Hypers0nicStore {
-  // --- boot ---
+
   hydrated: boolean;
 
-  // --- view ---
   view: View;
   omniboxValue: string;
   loading: boolean;
   proxyReady: boolean;
-  // Monotonically increasing counter that bumps ONLY on user-initiated
-  // navigation (navigate()). It is NOT bumped by setOmnibox(), which is
-  // called by Scramjet's urlchange/navigate events to update the omnibox
-  // display. ProxyFrame's navigation effect depends on this nonce instead
-  // of omniboxValue, so the feedback loop (go -> urlchange -> setOmnibox ->
-  // go again) is broken: the first load is kept, no reload happens.
+
   navNonce: number;
 
-  // --- settings ---
   settings: Hypers0nicSettings;
 
-  // --- history ---
   history: HistoryEntry[];
 
-  // --- bookmarks ---
   bookmarks: Bookmark[];
 
-  // --- custom shortcuts ---
   customShortcuts: CustomShortcut[];
 
-  // --- focus sessions ---
   focusSessions: FocusSessionRecord[];
   todaySessionCount: number;
   todayFocusMinutes: number;
   focusStreak: number;
 
-  // --- scramjet ---
   scramjet: ScramjetStateSnapshot;
 
-  // --- proxy tabs ---
   tabs: ProxyTab[];
   activeTabId: string | null;
   loadingTabs: Record<string, boolean>;
   recentlyClosedTabs: { id: string; url: string; title: string }[];
 
-  // --- actions ---
   hydrate: () => void;
   navigate: (input: string) => Promise<void>;
   goHome: () => void;
@@ -113,7 +99,7 @@ interface Hypers0nicStore {
   recordFocusSession: (durationMinutes: number) => void;
   addCustomShortcut: (shortcut: Omit<CustomShortcut, "id" | "addedAt">) => void;
   removeCustomShortcut: (id: string) => void;
-  // Tab actions
+
   closeTab: (id: string) => void;
   switchTab: (id: string) => void;
   reorderTabs: (from: number, to: number) => void;
@@ -126,17 +112,8 @@ interface Hypers0nicStore {
 let swRegistered = false;
 let swRegisterPromise: Promise<boolean> | null = null;
 
-// When the app is opened inside an about:blank popup (via the openInAboutBlank
-// feature), it loads with a #go=<url> hash. This flag is set true on such
-// loads so that subsequent navigations happen IN-PLACE (within the popup)
-// instead of opening yet another about:blank popup. Without this, every link
-// click inside the popup would spawn a new popup, creating an infinite chain.
 let inAboutBlankPopup = false;
 
-// Ensure the service worker is registered and controlling. Returns true if
-// the SW is actively controlling the page. This function is idempotent —
-// multiple calls share the same registration promise, preventing race
-// conditions where hydrate() and navigate() both try to register the SW.
 function ensureServiceWorker(): Promise<boolean> {
   if (swRegistered && typeof navigator !== "undefined" && navigator.serviceWorker?.controller) {
     return Promise.resolve(true);
@@ -178,9 +155,7 @@ export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
     const bookmarks = loadBookmarks();
     const focusSessions = loadFocusSessions();
     const customShortcuts = loadCustomShortcuts();
-    // Restore any saved proxy tabs from a previous session. The first tab
-    // (most recently used) is set as active so the user returns to where
-    // they left off.
+
     const savedTabs = loadTabs();
     set({
       settings,
@@ -203,34 +178,27 @@ export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
         settings.tabCloak.customIcon
       );
     }
-    // Subscribe to scramjet state so the UI reacts to boot progress.
+
     getScramjet().subscribe((snap) => set({ scramjet: snap }));
-    // Auto-warm the proxy on page load. Register the SW first (awaited), then
-    // init Scramjet. This ordering prevents the race condition where the SW
-    // intercepts a /service/ request before the controller has finished
-    // booting. Both are non-blocking to hydration.
+
+    getScramjet().startHeartbeat();
+    getScramjet().startVisibilityWatcher();
+
     ensureServiceWorker().then(() => {
       getScramjet().init(settings.wispUrl).catch(() => {});
     });
 
-    // --- Hash-based deep linking for about:blank popups ---
-    // When the openInAboutBlank feature opens a popup, it loads the app with
-    // a #go=<url> hash. On hydrate, we detect this hash, decode the target
-    // URL, set the inAboutBlankPopup flag (so navigations happen in-place
-    // instead of spawning more popups), and auto-navigate to the target.
     if (typeof window !== "undefined" && window.location.hash) {
       const hash = window.location.hash;
       if (hash.startsWith("#go=")) {
         const targetUrl = decodeURIComponent(hash.substring(4));
         if (targetUrl) {
           inAboutBlankPopup = true;
-          // Clear the hash so it doesn't interfere with future navigations
-          // or get picked up on refresh.
+
           try {
             window.history.replaceState(null, "", window.location.pathname);
           } catch {}
-          // Defer navigation to allow the UI to mount first. The ProxyFrame
-          // component needs to be rendered before we can drive the iframe.
+
           setTimeout(() => {
             get().navigate(targetUrl);
           }, 800);
@@ -246,23 +214,6 @@ export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
     const engine = getSearchEngine(settings.searchEngine);
     const target = normalizeInput(trimmed, engine);
 
-    // If the about:blank preference is enabled AND we're not already inside
-    // an about:blank popup, open the target in a new about:blank tab.
-    //
-    // Approach: open about:blank, then write a document containing a
-    // full-screen <iframe> that loads the app with a #go=<url> hash. The
-    // iframe is same-origin, so the service worker intercepts /service/*
-    // requests normally. The popup's address bar stays "about:blank"
-    // because no top-level navigation occurs — only the iframe navigates.
-    //
-    // The #go= hash is detected by hydrate() on the iframe's app load,
-    // which auto-navigates to the target URL and sets inAboutBlankPopup=true
-    // so subsequent navigations happen in-place.
-    //
-    // Fallbacks:
-    //   1. If window.open("about:blank") returns null (popup blocker),
-    //      fall back to opening the app URL directly in a new tab.
-    //   2. If that also fails, navigate in the current tab.
     if (settings.preferences.openInAboutBlank && !inAboutBlankPopup) {
       const appUrl =
         window.location.origin +
@@ -270,7 +221,6 @@ export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
         "#go=" +
         encodeURIComponent(target);
 
-      // Determine the cloak title/icon for the popup document.
       const cloak = settings.tabCloak;
       const preset = cloak.enabled
         ? getPreset(cloak.preset)
@@ -288,9 +238,6 @@ export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
           ? preset.icon || ""
           : "";
 
-      // Build the popup HTML. The iframe fills the entire viewport. The
-      // title and favicon are set to match the current cloak so the popup
-      // tab blends in with the user's other tabs.
       const faviconTag = cloakIcon
         ? `<link rel="icon" href="${cloakIcon}">`
         : "";
@@ -305,10 +252,6 @@ export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
         "<iframe src=\"" + appUrl + "\" allow=\"fullscreen;autoplay;encrypted-media;clipboard-read;clipboard-write;picture-in-picture\" sandbox=\"allow-same-origin allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-presentation allow-storage-access-by-user-activation\"></iframe>" +
         "</body></html>";
 
-      // CRITICAL: window.open must be called synchronously within the user
-      // gesture (the Enter key press). Do NOT await anything before this
-      // call — popup blockers check for user-activation, which expires
-      // after any await.
       let win: Window | null = null;
       try {
         win = window.open("about:blank", "_blank");
@@ -321,43 +264,33 @@ export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
           win.document.write(popupHtml);
           win.document.close();
         } catch {
-          // document.write failed (cross-origin restriction?) — fall back
-          // to opening the app URL directly. The address bar won't show
-          // about:blank, but the content will load.
+
           try {
             win.location.href = appUrl;
           } catch {
-            // Last resort: navigate the current tab.
+
             window.location.href = appUrl;
           }
         }
       } else {
-        // Popup blocker prevented about:blank. Fall back to opening the
-        // app URL directly in a new tab. The address bar will show the
-        // app URL instead of about:blank, but the content still loads.
+
         try {
           window.open(appUrl, "_blank");
         } catch {
-          // Last resort: navigate the current tab.
+
           window.location.href = appUrl;
         }
       }
       return;
     }
 
-    // --- Proxy tab management ---
-    // If we're already in the proxy view AND there's an active tab, update
-    // that tab's URL + navNonce (in-place navigation). Otherwise, create a
-    // new tab. Tabs are capped at 8 — when full, the OLDEST tab is closed
-    // (shifted off the front) to make room for the new one. Tabs are
-    // persisted via saveTabs() so they survive reloads.
     const nextNavNonce = get().navNonce + 1;
     const currentTabs = get().tabs;
     const currentActiveId = get().activeTabId;
     let updatedTabs: ProxyTab[];
     let newActiveId: string;
     if (get().view === "proxy" && currentActiveId) {
-      // Update the active tab in place.
+
       updatedTabs = currentTabs.map((t) =>
         t.id === currentActiveId
           ? { ...t, url: target, title: target, navNonce: nextNavNonce }
@@ -365,15 +298,14 @@ export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
       );
       newActiveId = currentActiveId;
     } else {
-      // Create a new tab.
+
       const newTab: ProxyTab = {
         id: `tab-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         url: target,
         title: target,
         navNonce: nextNavNonce,
       };
-      // If at max capacity, drop the oldest tab (front of array) and record
-      // it to recentlyClosedTabs so the user can reopen it.
+
       if (currentTabs.length >= 8) {
         const [oldest, ...rest] = currentTabs;
         if (oldest) {
@@ -402,9 +334,6 @@ export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
       activeTabId: newActiveId,
     });
 
-    // Boot scramjet with retry. The promise is memoised inside the manager
-    // so subsequent navigations are instant. If init fails, we force-reconnect
-    // and retry once before giving up — handles dropped transports.
     const sj = getScramjet();
     const tryInit = async () => {
       try {
@@ -422,10 +351,7 @@ export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
       set({ loading: false });
       return;
     }
-    // Ensure the SW is registered and controlling BEFORE setting proxyReady.
-    // This is the critical fix for the 40% failure rate: previously, the SW
-    // flag was set to true before registration completed, so /service/
-    // requests would 404. Now we await and verify.
+
     const swOk = await ensureServiceWorker();
     if (!swOk) {
       console.error("[hypers0nic] service worker not controlling after registration");
@@ -440,8 +366,7 @@ export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
   },
 
   goBack: () => {
-    // Back/forward is delegated to the ScramjetFrame instance living inside
-    // ProxyFrame. We emit a window event the frame listens for.
+
     window.dispatchEvent(new CustomEvent("hypers0nic:navigate", { detail: { action: "back" } }));
   },
 
@@ -622,7 +547,7 @@ export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
     if (idx === -1) return;
     const closed = tabs[idx];
     if (!closed) return;
-    // Record the closed tab so it can be reopened via Ctrl+Shift+T.
+
     const recentlyClosedTabs = [
       ...get().recentlyClosedTabs,
       { id: closed.id, url: closed.url, title: closed.title },
@@ -632,7 +557,7 @@ export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
 
     if (activeTabId === id) {
       if (remaining.length === 0) {
-        // No tabs left — go home.
+
         set({
           tabs: remaining,
           activeTabId: null,
@@ -643,8 +568,7 @@ export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
         });
         return;
       }
-      // Switch to the adjacent tab — prefer the one to the right of the
-      // closed tab; if it was the last tab, fall back to the previous one.
+
       const nextActive = remaining[Math.min(idx, remaining.length - 1)];
       if (nextActive) {
         set({
@@ -703,8 +627,7 @@ export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
     const { tabs, activeTabId } = get();
     const next = tabs.map((t) => (t.id === id ? { ...t, url } : t));
     saveTabs(next);
-    // Only update the omnibox if this is the active tab — otherwise we'd
-    // overwrite the URL the user is currently viewing.
+
     const patch: Partial<Hypers0nicStore> = { tabs: next };
     if (activeTabId === id) patch.omniboxValue = url;
     set(patch);
@@ -727,9 +650,7 @@ export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
     const last = recentlyClosedTabs[recentlyClosedTabs.length - 1];
     if (!last) return;
     const recentlyClosed = recentlyClosedTabs.slice(0, -1);
-    // Create a new tab from the closed tab's URL. If at max capacity, drop
-    // the oldest (but do NOT re-record it to recentlyClosed — that would
-    // create a reopen loop).
+
     let nextTabs: ProxyTab[];
     if (tabs.length >= 8) {
       const [, ...rest] = tabs;

@@ -20,10 +20,7 @@ export const DEFAULT_SETTINGS: Hypers0nicSettings = {
   preferences: {
     openLinksInNewTab: false,
     openInAboutBlank: false,
-    // The service worker is registered lazily on the first proxy navigation,
-    // AFTER the Scramjet controller has created its IndexedDB schema. Registering
-    // earlier would let the SW open the DB first (without an upgrade callback)
-    // and leave behind an empty database that breaks controller.init().
+
     preloadServiceWorker: false,
     showShortcuts: true,
     hideFromHistory: false,
@@ -38,8 +35,12 @@ export const DEFAULT_SETTINGS: Hypers0nicSettings = {
     autoProxyLinks: true,
     useLibcurlTransport: false,
   },
-  // Default wisp relay. Using wss://anura.pro as the public relay.
-  wispUrl: "wss://anura.pro",
+
+  wispUrl: "wss://anura.pro/",
+
+  wispUrlPath: "",
+
+  proxyPrefix: "/service/",
   tinfoil: { connected: false },
 };
 
@@ -49,9 +50,7 @@ export function loadSettings(): Hypers0nicSettings {
     const raw = window.localStorage.getItem(SETTINGS_KEY);
     if (!raw) return DEFAULT_SETTINGS;
     const parsed = JSON.parse(raw);
-    // Validate the parsed value is a plain object (not null, array, or primitive).
-    // Corrupted localStorage can contain anything; this prevents deepMerge
-    // from producing a broken settings object.
+
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
       window.localStorage.removeItem(SETTINGS_KEY);
       return DEFAULT_SETTINGS;
@@ -67,7 +66,7 @@ export function saveSettings(settings: Hypers0nicSettings) {
   try {
     window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
   } catch {
-    /* quota / privacy mode — fail quietly */
+
   }
 }
 
@@ -78,7 +77,7 @@ export function loadHistory(): HistoryEntry[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    // Filter out corrupt entries (missing required fields).
+
     return parsed.filter(
       (e: any) => e && typeof e.url === "string" && typeof e.visitedAt === "number"
     ) as HistoryEntry[];
@@ -90,10 +89,10 @@ export function loadHistory(): HistoryEntry[] {
 export function saveHistory(history: HistoryEntry[]) {
   if (typeof window === "undefined") return;
   try {
-    // Cap history at 200 entries to keep localStorage tidy.
+
     window.localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, 200)));
   } catch {
-    /* ignore */
+
   }
 }
 
@@ -117,20 +116,19 @@ export function saveBookmarks(bookmarks: Bookmark[]) {
   try {
     window.localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(bookmarks));
   } catch {
-    /* ignore */
+
   }
 }
 
 export interface FocusSessionRecord {
-  /** ISO date string (YYYY-MM-DD) of the day the session was completed. */
+
   date: string;
-  /** Duration of the completed session in minutes. */
+
   duration: number;
-  /** Completion timestamp. */
+
   completedAt: number;
 }
 
-/** Returns today's date as YYYY-MM-DD in the user's local timezone. */
 export function todayKey(): string {
   const d = new Date();
   return `${d.getFullYear()}-${(d.getMonth() + 1)
@@ -156,23 +154,21 @@ export function loadFocusSessions(): FocusSessionRecord[] {
 export function saveFocusSessions(sessions: FocusSessionRecord[]) {
   if (typeof window === "undefined") return;
   try {
-    // Keep only the last 100 sessions to avoid unbounded growth.
+
     window.localStorage.setItem(
       FOCUS_SESSIONS_KEY,
       JSON.stringify(sessions.slice(-100))
     );
   } catch {
-    /* ignore */
+
   }
 }
 
-/** Count how many focus sessions were completed today. */
 export function countTodaySessions(sessions: FocusSessionRecord[]): number {
   const today = todayKey();
   return sessions.filter((s) => s.date === today).length;
 }
 
-/** Total focused minutes today. */
 export function minutesToday(sessions: FocusSessionRecord[]): number {
   const today = todayKey();
   return sessions
@@ -180,20 +176,10 @@ export function minutesToday(sessions: FocusSessionRecord[]): number {
     .reduce((sum, s) => sum + s.duration, 0);
 }
 
-/**
- * Compute the current "streak" — the number of consecutive days (ending today
- * or yesterday) with at least one completed focus session.
- *
- * If the user focused today, the streak counts today + consecutive previous
- * days. If they didn't focus today but did yesterday, the streak still holds
- * (so it isn't reset the moment midnight strikes).
- */
 export function computeStreak(sessions: FocusSessionRecord[]): number {
   if (sessions.length === 0) return 0;
   const dates = new Set(sessions.map((s) => s.date));
 
-  // Start from today; if today has no session, start from yesterday so the
-  // streak survives until a full day is missed.
   const today = new Date();
   let streak = 0;
   let cursor = new Date(today);
@@ -205,7 +191,6 @@ export function computeStreak(sessions: FocusSessionRecord[]): number {
     cursor = yesterday;
   }
 
-  // Walk backwards day by day while sessions exist for that day.
   while (dates.has(dateKey(cursor))) {
     streak++;
     cursor.setDate(cursor.getDate() - 1);
@@ -239,7 +224,7 @@ export function saveCustomShortcuts(shortcuts: CustomShortcut[]) {
   try {
     window.localStorage.setItem(CUSTOM_SHORTCUTS_KEY, JSON.stringify(shortcuts));
   } catch {
-    /* ignore */
+
   }
 }
 
@@ -288,6 +273,6 @@ export function saveTabs(tabs: ProxyTab[]) {
   try {
     window.localStorage.setItem(TABS_KEY, JSON.stringify(tabs.slice(0, 8)));
   } catch {
-    /* ignore */
+
   }
 }
