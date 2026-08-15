@@ -292,14 +292,20 @@ class ScramjetManager {
   }
 
   private async setupLibcurlTransport(conn: any, candidates: string[]): Promise<void> {
-    const { LibcurlClient } = await import("@mercuryworkshop/libcurl-transport");
     let lastError: unknown;
     for (const candidate of candidates) {
       try {
         console.log("[hypers0nic] trying libcurl transport for", candidate);
-        const client = new LibcurlClient({ wisp: candidate });
-        await client.init();
-        await conn.setRemoteTransport(client);
+        const transportPromise = conn.setTransport("/libcurl/index.mjs", [
+          { wisp: candidate },
+        ]);
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error(`libcurl transport timeout for ${candidate}`)),
+            5000
+          )
+        );
+        await Promise.race([transportPromise, timeoutPromise]);
         this.transportUrl = candidate;
         console.log("[hypers0nic] libcurl transport connected via", candidate);
         return;
