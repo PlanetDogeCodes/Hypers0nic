@@ -40,7 +40,24 @@ export function AdvancedPanel() {
   const useLibcurlTransport = useHypers0nic((s) => s.settings.preferences.useLibcurlTransport);
   const setPreferences = useHypers0nic((s) => s.setPreferences);
 
+  const wispUrlPath = useHypers0nic((s) => s.settings.wispUrlPath);
+  const proxyPrefix = useHypers0nic((s) => s.settings.proxyPrefix);
+  const setWispUrlPath = (path: string) => {
+    const settings = { ...useHypers0nic.getState().settings, wispUrlPath: path };
+    useHypers0nic.setState({ settings });
+    saveSettings(settings);
+  };
+  const setProxyPrefix = (prefix: string) => {
+
+    if (prefix && !/^\/[a-z0-9\-]+\/$/i.test(prefix)) return;
+    const settings = { ...useHypers0nic.getState().settings, proxyPrefix: prefix || "/service/" };
+    useHypers0nic.setState({ settings });
+    saveSettings(settings);
+  };
+
   const [draft, setDraft] = useState(wispUrl);
+  const [draftPath, setDraftPath] = useState(wispUrlPath);
+  const [draftPrefix, setDraftPrefix] = useState(proxyPrefix);
   const [testing, setTesting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -95,18 +112,18 @@ export function AdvancedPanel() {
       }
     };
     reader.readAsText(file);
-    // Reset the input so the same file can be re-imported.
+
     e.target.value = "";
   };
 
   const handleReset = () => {
     setDraft("");
     setWispUrl("");
-    toast.success("Reset to the local relay.");
+    toast.success("Reset to the default relay.");
   };
 
   const handleResetAll = () => {
-    // Wipe every localStorage key Hypers0nic owns.
+
     const keys = [
       "hypers0nic:settings:v1",
       "hypers0nic:history:v1",
@@ -120,14 +137,14 @@ export function AdvancedPanel() {
       try {
         localStorage.removeItem(k);
       } catch {
-        /* ignore */
+
       }
     });
-    // Clear the scramjet IDB so a fresh boot isn't confused by a stale schema.
+
     try {
       indexedDB.deleteDatabase("$scramjet");
     } catch {
-      /* ignore */
+
     }
     toast.success("All data erased. Reloading…");
     setTimeout(() => window.location.reload(), 1200);
@@ -136,9 +153,7 @@ export function AdvancedPanel() {
   const handleRestart = async () => {
     setTesting(true);
     try {
-      // Re-initialise scramjet. The manager memoises by init promise, so we
-      // rely on a full page reload to truly restart; here we just verify the
-      // current state.
+
       const sj = getScramjet();
       const snap = sj.getState();
       toast[scramjet.status === "ready" ? "success" : "error"](
@@ -157,7 +172,7 @@ export function AdvancedPanel() {
         <h3 className="text-sm font-semibold text-foreground">Transport relay</h3>
         <p className="mt-0.5 text-xs text-muted-foreground">
           Scramjet tunnels traffic through a wisp WebSocket relay. Leave blank to
-          use the bundled local relay; point at your own server for self-hosting.
+          use the default public relay; point at your own server for self-hosting.
         </p>
       </div>
 
@@ -179,16 +194,77 @@ export function AdvancedPanel() {
           <Button onClick={handleSave}>Save</Button>
         </div>
         <p className="text-[11px] text-muted-foreground">
-          Default: <code className="rounded bg-muted/60 px-1 py-0.5">same-origin via Caddy → :3001</code>
+          Default: <code className="rounded bg-muted/60 px-1 py-0.5">wss://anura.pro</code> (public relay)
         </p>
         <Button variant="ghost" size="sm" onClick={handleReset} className="mt-1 h-7 text-xs">
-          Reset to local relay
+          Reset to default relay
         </Button>
+      </div>
+
+      <div className="space-y-1.5">
+        <Label htmlFor="wisp-url-path">Wisp URL path disguise</Label>
+        <div className="flex gap-2">
+          <Input
+            id="wisp-url-path"
+            placeholder="/api/stream (optional)"
+            value={draftPath}
+            onChange={(e) => setDraftPath(e.target.value)}
+            autoComplete="off"
+            spellCheck={false}
+            className="font-mono text-xs"
+          />
+          <Button
+            onClick={() => {
+              setWispUrlPath(draftPath);
+              toast.success("Wisp URL path saved. It applies on the next proxy boot.");
+            }}
+          >
+            Save
+          </Button>
+        </div>
+        <p className="text-[11px] text-muted-foreground">
+          Optional. Appends a custom path to the wisp URL (e.g.,{" "}
+          <code className="rounded bg-muted/60 px-1 py-0.5">/api/stream</code>) so the
+          WebSocket traffic looks like a normal API call. Helps evade path-based filters.
+        </p>
+      </div>
+
+      <div className="space-y-1.5">
+        <Label htmlFor="proxy-prefix">Proxy prefix</Label>
+        <div className="flex gap-2">
+          <Input
+            id="proxy-prefix"
+            placeholder="/service/"
+            value={draftPrefix}
+            onChange={(e) => setDraftPrefix(e.target.value)}
+            autoComplete="off"
+            spellCheck={false}
+            className="font-mono text-xs"
+          />
+          <Button
+            onClick={() => {
+              if (draftPrefix && !/^\/[a-z0-9\-]+\/$/i.test(draftPrefix)) {
+                toast.error("Prefix must start and end with /, contain at least one letter/number, and only use letters, numbers, and hyphens. Example: /s/");
+                return;
+              }
+              setProxyPrefix(draftPrefix);
+              toast.success("Proxy prefix saved. Reload the page to apply (SW re-registration required).");
+            }}
+          >
+            Save
+          </Button>
+        </div>
+        <p className="text-[11px] text-muted-foreground">
+          The path the service worker intercepts. Default:{" "}
+          <code className="rounded bg-muted/60 px-1 py-0.5">/service/</code>. Change
+          to <code className="rounded bg-muted/60 px-1 py-0.5">/s/</code>,{" "}
+          <code className="rounded bg-muted/60 px-1 py-0.5">/browse/</code>, etc. to
+          evade filters that block the known /service/ path. Requires page reload.
+        </p>
       </div>
 
       <div className="h-px bg-border/40" />
 
-      {/* Transport mode — Epoxy (default) vs libcurl (Tinf0il mode) */}
       <div className="space-y-3">
         <h3 className="text-sm font-semibold text-foreground">Transport mode</h3>
         <p className="text-xs text-muted-foreground">
@@ -252,7 +328,6 @@ export function AdvancedPanel() {
 
       <div className="h-px bg-border/40" />
 
-      {/* Data backup / restore */}
       <div className="space-y-3">
         <h3 className="text-sm font-semibold text-foreground">Backup &amp; restore</h3>
         <p className="text-xs text-muted-foreground">
@@ -287,7 +362,6 @@ export function AdvancedPanel() {
         </div>
       </div>
 
-      {/* Danger zone — reset all data */}
       <div className="space-y-3">
         <h3 className="text-sm font-semibold text-destructive">Danger zone</h3>
         <div className="flex items-center justify-between gap-4 rounded-xl border border-destructive/20 bg-destructive/5 p-3">

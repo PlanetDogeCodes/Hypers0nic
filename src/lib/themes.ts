@@ -1,8 +1,5 @@
 import type { Theme, ThemeId } from "./types";
 
-// All themes use a pure-black background with white monospace text and white
-// borders. The only variation is the accent colour — purple by default, with
-// a few alternatives for users who want a different highlight.
 export const THEMES: Theme[] = [
   {
     id: "hypers0nic",

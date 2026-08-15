@@ -36,8 +36,7 @@ export function Header({
   const tabCloak = useHypers0nic((s) => s.settings.tabCloak);
   const toggleStealth = useHypers0nic((s) => s.toggleStealth);
   const topBarAlwaysVisible = useHypers0nic((s) => s.settings.preferences.topBarAlwaysVisible);
-  // When there are 2+ proxy tabs, the TabBar is rendered above the header.
-  // We shift the header down by 2rem (top-8) to make room for it.
+
   const tabCount = useHypers0nic((s) => s.tabs.length);
   const hasTabBar = tabCount >= 1;
   const [visible, setVisible] = useState(topBarAlwaysVisible);
@@ -88,7 +87,6 @@ export function Header({
           visible ? "translate-y-0" : "-translate-y-full"
         )}
       >
-        {/* Clock */}
         <button
           type="button"
           onClick={goHome}
@@ -110,7 +108,6 @@ export function Header({
           </Button>
         )}
 
-        {/* Command palette trigger */}
         <button
           onClick={onOpenPalette}
           className="ml-auto hidden items-center gap-2 rounded border border-border/30 bg-card/50 px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:border-border/60 hover:text-foreground md:flex"
@@ -123,7 +120,6 @@ export function Header({
         </button>
 
         <div className="ml-auto flex items-center gap-1 md:ml-2">
-          {/* Tinf0il login/profile button */}
           {tinfoil.connected ? (
             <button
               onClick={onOpenTinf0il}

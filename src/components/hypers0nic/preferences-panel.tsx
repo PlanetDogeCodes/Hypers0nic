@@ -82,7 +82,6 @@ export function PreferencesPanel() {
 
       <div className="h-px bg-border/20" />
 
-      {/* Panic key configuration */}
       <div className="space-y-3">
         <div className="flex items-start justify-between gap-4">
           <div>
@@ -110,7 +109,7 @@ export function PreferencesPanel() {
                 value={preferences.panicKey}
                 onChange={(e) => {
                   const val = e.target.value;
-                  // Take only the last character typed.
+
                   setPreferences({ panicKey: val.slice(-1) || "`" });
                 }}
                 className="text-sm"

@@ -1,7 +1,5 @@
 import type { SearchEngine } from "./types";
 
-// Curated set of search engines. The `url` field uses %s as the query
-// placeholder so the same template works for both navigation and the omnibox.
 export const SEARCH_ENGINES: SearchEngine[] = [
   {
     id: "duckduckgo",
@@ -51,22 +49,16 @@ export function getSearchEngine(id: string): SearchEngine {
   return SEARCH_ENGINES.find((e) => e.id === id) ?? SEARCH_ENGINES[0];
 }
 
-/**
- * Decide whether a string looks like a URL (with a scheme) or a search query.
- * Bare domains like "wikipedia.org" are treated as URLs so users can skip the
- * "https://" prefix, matching the behaviour of every modern omnibox.
- */
 export function isLikelyUrl(input: string): boolean {
   const trimmed = input.trim();
   if (!trimmed) return false;
   if (/\s/.test(trimmed)) return false;
   if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed)) return true;
   if (/^localhost(:\d+)?(\/.*)?$/.test(trimmed)) return true;
-  // "example.com" / "sub.example.co.uk" — must have a dot and a TLD-ish tail.
+
   return /^[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)+(:\d+)?(\/.*)?$/.test(trimmed);
 }
 
-/** Normalise loose input into a real URL the proxy can fetch. */
 export function normalizeInput(input: string, engine: SearchEngine): string {
   const trimmed = input.trim();
   if (isLikelyUrl(trimmed)) {
@@ -76,16 +68,14 @@ export function normalizeInput(input: string, engine: SearchEngine): string {
     } else {
       url = `https://${trimmed}`;
     }
-    // Auto-add trailing slash if the URL has no path (e.g., "https://example.com"
-    // becomes "https://example.com/"). This prevents 404s on sites that redirect
-    // to the slash version, and ensures the proxy URL is consistent.
+
     try {
       const parsed = new URL(url);
       if (parsed.pathname === "") {
         url = url + "/";
       }
     } catch {
-      // Not a valid URL, leave as-is
+
     }
     return url;
   }

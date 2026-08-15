@@ -1,20 +1,11 @@
 import type { TinfoilPayload, Hypers0nicSettings } from "./types";
 
-// Tinf0il integration.
-//
-// Tinf0il stores a user profile (tab cloak, theme, search engine, preferences)
-// on its own sync server. Hypers0nic never speaks to that server directly from
-// the browser — instead it POSTs the credentials to our /api/tinfoil/sync route
-// which performs the upstream fetch and normalises the payload into the shape
-// defined by TinfoilPayload. This keeps tokens off the client and lets the
-// server-side route adapt to whatever Tinf0il endpoint shape the user is on.
-
 export interface TinfoilCredentials {
-  /** Base URL of the Tinf0il sync instance, e.g. https://tinf0il.example.app */
+
   endpoint: string;
-  /** Username or email on the Tinf0il instance. */
+
   username: string;
-  /** Password or long-lived token. */
+
   token: string;
 }
 
@@ -49,11 +40,6 @@ export async function syncTinfoil(
   }
 }
 
-/**
- * Merge a Tinf0il payload into the current settings. Only fields actually
- * present in the payload are overridden, so partial profiles don't wipe local
- * configuration.
- */
 export function applyTinfoilPayload(
   settings: Hypers0nicSettings,
   payload: TinfoilPayload,

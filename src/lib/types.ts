@@ -1,13 +1,11 @@
-// Shared domain types for Hypers0nic.
-
 export type View = "home" | "proxy";
 
 export interface SearchEngine {
   id: string;
   name: string;
-  /** Pattern with %s where the query goes. */
+
   url: string;
-  /** Suggestion endpoint (optional). %s is replaced with the query. */
+
   suggest?: string;
   accent: string;
 }
@@ -48,7 +46,7 @@ export type ThemeId =
 export interface Theme {
   id: ThemeId;
   name: string;
-  /** CSS variables applied to :root. */
+
   vars: Record<string, string>;
   isDark: boolean;
 }
@@ -75,7 +73,7 @@ export interface TinfoilProfile {
   connected: boolean;
   username?: string;
   syncedAt?: number;
-  /** Raw payload returned by Tinf0il (kept for re-export / debugging). */
+
   payload?: TinfoilPayload;
 }
 
@@ -92,6 +90,10 @@ export interface Hypers0nicSettings {
   searchEngine: string;
   preferences: Preferences;
   wispUrl: string;
+
+  wispUrlPath: string;
+
+  proxyPrefix: string;
   tinfoil: TinfoilProfile;
 }
 
@@ -118,9 +120,9 @@ export interface CustomShortcut {
   id: string;
   name: string;
   url: string;
-  /** Optional emoji or single-letter label shown in the tile. */
+
   label?: string;
-  /** Optional accent color (any CSS color). */
+
   color?: string;
   addedAt: number;
 }

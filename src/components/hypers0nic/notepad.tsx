@@ -7,8 +7,7 @@ import { cn } from "@/lib/utils";
 const NOTEPAD_KEY = "hypers0nic:notepad:v1";
 
 export function Notepad({ onClose }: { onClose?: () => void }) {
-  // Lazy-init from localStorage so the first paint already has saved text —
-  // no setState call inside the effect body.
+
   const [text, setText] = useState(() => {
     if (typeof window === "undefined") return "";
     try {
@@ -25,7 +24,7 @@ export function Notepad({ onClose }: { onClose?: () => void }) {
       setSaved(true);
       setTimeout(() => setSaved(false), 1500);
     } catch {
-      /* ignore */
+
     }
   };
 
@@ -34,7 +33,7 @@ export function Notepad({ onClose }: { onClose?: () => void }) {
     try {
       localStorage.removeItem(NOTEPAD_KEY);
     } catch {
-      /* ignore */
+
     }
   };
 

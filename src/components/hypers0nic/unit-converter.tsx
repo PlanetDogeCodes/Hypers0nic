@@ -19,7 +19,7 @@ type Category = "length" | "weight" | "temperature";
 interface Unit {
   id: string;
   label: string;
-  // Factor to base unit (for length/weight). Temperature uses special functions.
+
   toBase: (v: number) => number;
   fromBase: (v: number) => number;
 }
@@ -107,7 +107,6 @@ export function UnitConverter({ onClose }: { onClose?: () => void }) {
         )}
       </div>
 
-      {/* Category tabs */}
       <div className="flex items-center gap-1 rounded-lg border border-border/40 bg-muted/20 p-1">
         {CATEGORIES.map((cat) => {
           const Icon = cat.icon;
@@ -129,7 +128,6 @@ export function UnitConverter({ onClose }: { onClose?: () => void }) {
         })}
       </div>
 
-      {/* From */}
       <div className="space-y-1.5">
         <Label className="text-xs text-muted-foreground">From</Label>
         <div className="flex gap-2">
@@ -155,7 +153,6 @@ export function UnitConverter({ onClose }: { onClose?: () => void }) {
         </div>
       </div>
 
-      {/* Swap button */}
       <div className="flex justify-center">
         <button
           onClick={swap}
@@ -166,7 +163,6 @@ export function UnitConverter({ onClose }: { onClose?: () => void }) {
         </button>
       </div>
 
-      {/* To */}
       <div className="space-y-1.5">
         <Label className="text-xs text-muted-foreground">To</Label>
         <div className="flex gap-2">
@@ -192,7 +188,6 @@ export function UnitConverter({ onClose }: { onClose?: () => void }) {
         </div>
       </div>
 
-      {/* Formula hint */}
       {result !== null && (
         <p className="text-center text-xs text-muted-foreground">
           {inputValue || "0"} {units.find((u) => u.id === fromUnit)?.label} ={" "}
@@ -210,7 +205,7 @@ function formatNumber(n: number): string {
   if (Math.abs(n) >= 1_000_000 || (Math.abs(n) < 0.001 && n !== 0)) {
     return n.toExponential(4);
   }
-  // Trim trailing zeros but keep at most 6 significant digits.
+
   const rounded = parseFloat(n.toPrecision(6));
   return rounded.toString();
 }

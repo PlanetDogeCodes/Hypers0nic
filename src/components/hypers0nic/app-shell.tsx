@@ -58,8 +58,6 @@ export function AppShell() {
     }
   }, [tabCloak.enabled, tabCloak.preset, tabCloak.customTitle, tabCloak.customIcon]);
 
-  // The tab bar appears above the header whenever there's at least 1 tab.
-  // Both the header/toolbar and the page content need to be pushed down.
   const hasTabBar = tabCount >= 1;
 
   useKeyboardShortcuts({
@@ -86,16 +84,12 @@ export function AppShell() {
         onOpenTinf0il={() => setTinf0ilOpen(true)}
         onOpenCookies={() => setCookiesOpen(true)}
       />
-      {/* When the top bar is always visible, push content down by its height.
-          If the tab bar is also visible, add another 2rem (h-8) for it. */}
       <div className={(topBarAlwaysVisible ? "pt-12 " : "") + (hasTabBar ? "pt-8" : "")}>
         <main className="flex min-h-[calc(100vh-3rem)] flex-col">
           {view === "home" ? (
             <HomeView onOpenHistory={() => setHistoryOpen(true)} />
           ) : (
-            // transition-opacity duration-200 — fades the proxy frame in when
-            // a tab is clicked/switched, giving a smooth visual handoff
-            // instead of an abrupt iframe swap.
+
             <div key={activeTabId ?? "home"} className="transition-opacity duration-200">
               <ProxyFrame />
             </div>

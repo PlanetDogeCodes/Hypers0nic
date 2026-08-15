@@ -26,20 +26,6 @@ export function ProxyFrame() {
   const [status, setStatus] = useState<FrameStatus>("loading");
   const [error, setError] = useState<string | null>(null);
 
-  // --- refs that decouple navigation from React state ---
-  //
-  // omniboxRef: always holds the latest omniboxValue. Used inside the load
-  //   handler so we don't need omniboxValue in the load effect's dependency
-  //   array (which would reset the "settled" guard on every urlchange).
-  //
-  // settledRef: true once a navigation's load event (or safety timeout) has
-  //   fired. Prevents duplicate recordVisit calls and duplicate status flips.
-  //   Reset to false at the start of every navigation (go/back/forward/reload).
-  //
-  // recordedRef: ensures recordVisit is called exactly once per navigation.
-  //
-  // safetyTimeoutRef: the 12-second fallback timer. Cleared when the load
-  //   event fires. Some sites (streaming/long-poll) delay the load event.
   const omniboxRef = useRef(omniboxValue);
   const settledRef = useRef(true);
   const recordedRef = useRef(true);
@@ -49,21 +35,12 @@ export function ProxyFrame() {
     setMounted(true);
   }, []);
 
-  // Keep omniboxRef in sync with the store. This runs as its own effect so the
-  // nav effect (below) can depend on navNonce alone — urlchange-driven
-  // omniboxValue updates update the ref but do NOT re-trigger frame.go().
   useEffect(() => {
     omniboxRef.current = omniboxValue;
   }, [omniboxValue]);
 
-  // The iframe may only mount once BOTH the Scramjet controller has booted AND
-  // the service worker is actively controlling the page.
   const ready = scramjet.status === "ready" && proxyReady;
 
-  // Record the current navigation in history. Guarded by recordedRef so it
-  // is called exactly once per navigation — either from the iframe load event
-  // (user-initiated) or from the urlchange handler (link-click/redirect whose
-  // load event was skipped by the settled guard).
   const recordCurrent = useCallback((url: string) => {
     if (recordedRef.current) return;
     recordedRef.current = true;
@@ -71,24 +48,17 @@ export function ProxyFrame() {
       const frame = frameRef.current as any;
       const title = frame?.title || iframeRef.current?.contentDocument?.title || "";
       if (title && url) recordVisit(url, title);
-      // Sync the active tab's title so the TabBar shows the page title
-      // instead of the raw URL. The URL is updated separately by the
-      // urlchange handler.
+
       const tabId = useHypers0nic.getState().activeTabId;
       if (tabId) {
         if (title) setTabTitle(tabId, title);
         updateTabUrl(tabId, url);
       }
     } catch {
-      /* cross-origin reads throw — Scramjet handles title via events */
+
     }
   }, [recordVisit, setTabTitle, updateTabUrl]);
 
-  // Mark a navigation as in-flight: reset guards, flip UI to loading, arm
-  // the safety timeout. Also clears any previous error state so the user
-  // doesn't see a stale error message from a failed navigation.
-  // Safety timeout is 20 seconds — some proxied sites legitimately take
-  // 15+ seconds to load (especially through a wisp relay).
   const beginNavigation = useCallback(() => {
     settledRef.current = false;
     recordedRef.current = false;
@@ -103,8 +73,6 @@ export function ProxyFrame() {
     }, 20000);
   }, [recordCurrent]);
 
-  // Subscribe to the ScramjetFrame once it exists. All state updates happen in
-  // event callbacks (not the effect body), which keeps renders cascade-free.
   useEffect(() => {
     if (!ready || !iframeRef.current) return;
     const sj = getScramjet();
@@ -122,10 +90,7 @@ export function ProxyFrame() {
         if (attempt < 3 && !cancelled) {
           retryTimer = setTimeout(() => tryCreateFrame(attempt + 1), 500 * (attempt + 1));
         } else if (!cancelled) {
-          // All retries failed — fall back to setting the iframe src directly
-          // to the encoded proxy URL. The SW will still intercept /service/*
-          // requests, so the content will load (just without the ScramjetFrame
-          // API for back/forward/urlchange events).
+
           try {
             const encoded = sj.encodeUrl(omniboxRef.current);
             if (iframeRef.current && encoded) {
@@ -145,18 +110,6 @@ export function ProxyFrame() {
     const setupFrameListeners = () => {
       if (!frame || cancelled) return;
 
-      // urlchange / navigate events fire when Scramjet itself moves the
-      // iframe (link click, redirect, pushState, back/forward, or our own
-      // frame.go call). We update the omnibox DISPLAY only — we deliberately
-      // do NOT call frame.go() here, because the iframe has already moved.
-      // The navigation effect below depends on navNonce (which only bumps on
-      // user-initiated navigate()), so this setOmnibox call will NOT cause a
-      // reload. This is the fix for "loads quickly, then unloads and reloads".
-      //
-      // Additionally, if the load event already fired (settledRef is true)
-      // but we haven't recorded the visit yet (recordedRef is false), this is
-      // a link-click/redirect whose load event was skipped by the settled
-      // guard. Record it now using the canonical urlchange URL.
       const onUrlChange = function (e: any) {
         const url = typeof e.url === "string" ? e.url : (e.url && e.url.href) || "";
         if (url) {
@@ -193,12 +146,6 @@ export function ProxyFrame() {
     };
   }, [ready, setOmnibox, recordCurrent]);
 
-  // Drive navigation when the USER initiates one (navNonce bumps). We
-  // intentionally do NOT depend on omniboxValue here: Scramjet's urlchange
-  // event updates omniboxValue (via setOmnibox) after every load, and if this
-  // effect depended on omniboxValue it would re-fire frame.go() — causing the
-  // "loads quickly, then unloads and reloads" bug. The URL to navigate to is
-  // read from omniboxRef.current, which is kept in sync by the effect above.
   useEffect(() => {
     if (!ready || !frameRef.current) return;
     const url = omniboxRef.current;
@@ -206,16 +153,9 @@ export function ProxyFrame() {
 
     beginNavigation();
 
-    // Auto-retry with force-reconnect on navigation failure. If frame.go()
-    // throws (dead transport, controller issue), we force-reconnect the
-    // Scramjet manager, wait for re-init, and retry the navigation once.
     let retried = false;
     const tryNavigate = async () => {
-      // Quick health check before navigation — verifies the transport is
-      // actually moving bytes (not just that the SharedWorker is alive).
-      // If the wisp relay has restarted since the last navigation, the
-      // WebSocket may be dead even though the worker is fine. Force-
-      // reconnecting here avoids a failed frame.go() mid-load.
+
       const sj = getScramjet();
       try {
         const healthy = await sj.quickHealthCheck();
@@ -233,7 +173,7 @@ export function ProxyFrame() {
         if (!retried) {
           retried = true;
           sj.forceReconnect();
-          // Re-init and retry after a short delay.
+
           sj.init(useHypers0nic.getState().settings.wispUrl)
             .then(() => {
               try {
@@ -260,8 +200,6 @@ export function ProxyFrame() {
     tryNavigate();
   }, [navNonce, ready, beginNavigation]);
 
-  // Listen for back/forward/reload commands dispatched by the store.
-  // These reset the settled guard so the subsequent load event is not skipped.
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail as { action: string };
@@ -286,10 +224,6 @@ export function ProxyFrame() {
     return () => window.removeEventListener("hypers0nic:navigate", handler);
   }, [beginNavigation]);
 
-  // Single load listener, set up once when the iframe mounts. It does NOT
-  // depend on omniboxValue, so urlchange-driven omnibox updates don't tear
-  // down and re-create the listener. The URL for recordVisit is read from
-  // omniboxRef.current.
   useEffect(() => {
     const iframe = iframeRef.current;
     if (!iframe) return;
@@ -309,17 +243,12 @@ export function ProxyFrame() {
     };
   }, [recordVisit, recordCurrent]);
 
-  // Clear the safety timeout on unmount.
   useEffect(() => {
     return () => {
       if (safetyTimeoutRef.current) clearTimeout(safetyTimeoutRef.current);
     };
   }, []);
 
-  // The container height accounts for the header (3rem) when topBarAlwaysVisible
-  // is on, plus the tab bar (2rem) when 2+ tabs are open. Without this, the
-  // iframe would extend under the header/toolbar and the bottom would be
-  // clipped off-screen.
   const hasTabBar = tabCount >= 1;
   const containerHeight = mounted && topBarAlwaysVisible
     ? hasTabBar
@@ -333,14 +262,28 @@ export function ProxyFrame() {
       <div className="relative flex-1 bg-background">
         {status === "loading" && (
           <div className="absolute inset-0 z-10 overflow-hidden bg-background">
-            {/* Skeleton loader — plain divs (not motion.div) prevent the
-                "Cannot read properties of null (reading 'removeChild')" error
-                that occurs when a motion component is mid-exit animation and
-                the parent unmounts (e.g. rapid navigation). The skeleton-block
-                class has its own CSS animation, so no JS animation needed. */}
             <div className="mx-auto max-w-4xl space-y-4 p-6">
               <div className="flex items-center gap-3">
-                <div className="skeleton-block h-8 w-8 rounded-full" />
+                {(() => {
+                  try {
+                    const targetUrl = omniboxRef.current;
+                    if (targetUrl) {
+                      const hostname = new URL(targetUrl).hostname;
+                      const faviconUrl = `https://www.google.com/s2/favicons?domain=${hostname}&sz=64`;
+                      return (
+                        <img
+                          src={faviconUrl}
+                          alt=""
+                          className="size-8 rounded-md bg-muted/30"
+                          onError={(e) => {
+                            (e.currentTarget as HTMLImageElement).style.display = "none";
+                          }}
+                        />
+                      );
+                    }
+                  } catch {}
+                  return <div className="skeleton-block h-8 w-8 rounded-full" />;
+                })()}
                 <div className="skeleton-block h-6 flex-1 rounded-md" />
                 <div className="skeleton-block h-8 w-20 rounded-md" />
               </div>
@@ -360,7 +303,6 @@ export function ProxyFrame() {
                 <div className="skeleton-block h-4 w-3/4 rounded-md" />
               </div>
             </div>
-            {/* Floating status pill */}
             <div className="absolute bottom-6 left-1/2 -translate-x-1/2">
               <div className="flex items-center gap-2 rounded-full border border-primary/20 bg-card/80 px-4 py-2 text-sm shadow-lg backdrop-blur-md">
                 <Loader2 className="size-4 animate-spin text-primary" />
@@ -380,35 +322,60 @@ export function ProxyFrame() {
                 {error ||
                   "The proxy transport rejected the request. Check your wisp relay setting or try again."}
               </p>
-              <div className="flex justify-center gap-3">
+              <div className="flex flex-col justify-center gap-2">
+                <div className="flex justify-center gap-3">
+                  <button
+                    onClick={() => {
+                      const sj = getScramjet();
+                      sj.forceReconnect();
+                      setStatus("loading");
+                      setError(null);
+                      sj.init(useHypers0nic.getState().settings.wispUrl)
+                        .then(() => {
+                          if (frameRef.current && omniboxRef.current) {
+                            settledRef.current = false;
+                            recordedRef.current = false;
+                            beginNavigation();
+                            try {
+                              frameRef.current.go(omniboxRef.current);
+                            } catch {}
+                          }
+                        })
+                        .catch(() => setStatus("error"));
+                    }}
+                    className="rounded border border-primary bg-primary/10 px-4 py-2 text-sm font-medium text-primary transition-colors hover:bg-primary/20"
+                  >
+                    Retry
+                  </button>
+                  <button
+                    onClick={() => useHypers0nic.getState().goHome()}
+                    className="rounded border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted"
+                  >
+                    Home
+                  </button>
+                </div>
                 <button
                   onClick={() => {
                     const sj = getScramjet();
                     sj.forceReconnect();
                     setStatus("loading");
                     setError(null);
-                    sj.init(useHypers0nic.getState().settings.wispUrl)
-                      .then(() => {
-                        if (frameRef.current && omniboxRef.current) {
-                          settledRef.current = false;
-                          recordedRef.current = false;
-                          beginNavigation();
-                          try {
-                            frameRef.current.go(omniboxRef.current);
-                          } catch {}
-                        }
-                      })
-                      .catch(() => setStatus("error"));
+
+                    useHypers0nic.getState().setWispUrl("");
+                    sj.init("").then(() => {
+                      if (frameRef.current && omniboxRef.current) {
+                        settledRef.current = false;
+                        recordedRef.current = false;
+                        beginNavigation();
+                        try {
+                          frameRef.current.go(omniboxRef.current);
+                        } catch {}
+                      }
+                    }).catch(() => setStatus("error"));
                   }}
-                  className="rounded border border-primary bg-primary/10 px-4 py-2 text-sm font-medium text-primary transition-colors hover:bg-primary/20"
+                  className="rounded border border-border/60 px-4 py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                 >
-                  Retry
-                </button>
-                <button
-                  onClick={() => useHypers0nic.getState().goHome()}
-                  className="rounded border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted"
-                >
-                  Home
+                  Try a different relay
                 </button>
               </div>
             </div>
@@ -426,16 +393,7 @@ export function ProxyFrame() {
             ref={iframeRef}
             title="Proxied content"
             className="size-full border-0 bg-white"
-            // `allow-same-origin` is REQUIRED for YouTube, Twitch, and most
-            // modern SPAs — their player APIs and login flows need to access
-            // document.cookie, localStorage, and same-origin APIs. Without it,
-            // YouTube's player throws "Blocked a frame with origin..." and
-            // Twitch's video never initializes.
-            //
-            // `allow-popups` lets proxied sites open new windows/popups.
-            // `allow-presentation` enables casting / PiP on video sites.
-            // `allow-storage-access-by-user-activation` allows 3rd-party cookie
-            // access prompts (used by some Google sign-in flows).
+
             sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-presentation allow-storage-access-by-user-activation"
             allow="fullscreen; autoplay; encrypted-media; clipboard-read; clipboard-write; picture-in-picture; web-share; gamepad; gyroscope; accelerometer"
             referrerPolicy="no-referrer-when-downgrade"

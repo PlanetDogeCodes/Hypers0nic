@@ -1,7 +1,5 @@
 import type { TabCloakPreset, TabCloakPresetId } from "./types";
 
-// Tab-cloak presets. The "classroom" preset is the default and uses the
-// custom title/icon from settings so users can configure it.
 export const TAB_CLOAK_PRESETS: TabCloakPreset[] = [
   { id: "default", name: "Hypers0nic", title: "Hypers0nic", icon: "/icon.png" },
   {
@@ -53,18 +51,13 @@ export function getPreset(id: TabCloakPresetId): TabCloakPreset {
   return TAB_CLOAK_PRESETS.find((p) => p.id === id) ?? TAB_CLOAK_PRESETS[0];
 }
 
-/**
- * Apply a tab cloak. The classroom preset uses customTitle/customIcon from
- * settings so users can configure the exact title and favicon they want.
- */
 export function applyTabCloak(
   presetId: TabCloakPresetId,
   customTitle?: string,
   customIcon?: string
 ) {
   const preset = getPreset(presetId);
-  // For the classroom preset, use the custom title/icon if provided.
-  // For custom preset, use the custom values. For all others, use preset values.
+
   let title: string;
   let icon: string;
 

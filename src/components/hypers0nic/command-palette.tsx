@@ -61,7 +61,6 @@ function hostnameOf(url: string): string {
   }
 }
 
-// Simple fuzzy match: returns true if all chars of query appear in order in text.
 function fuzzyMatch(query: string, text: string): boolean {
   if (!query) return true;
   const q = query.toLowerCase();
@@ -73,14 +72,13 @@ function fuzzyMatch(query: string, text: string): boolean {
   return qi === q.length;
 }
 
-// Score: higher = better match. 0 = no match.
 function fuzzyScore(query: string, text: string): number {
   if (!query) return 1;
   const q = query.toLowerCase();
   const t = text.toLowerCase();
   if (t.startsWith(q)) return 100 + q.length;
   if (t.includes(q)) return 50 + q.length;
-  // Fuzzy: count consecutive matches for a rough quality score.
+
   let qi = 0;
   let score = 0;
   let streak = 0;
@@ -113,7 +111,6 @@ export function CommandPalette({
 
   const engine = getSearchEngine(settings.searchEngine);
 
-  // Reset on open
   useEffect(() => {
     if (open) {
       setQuery("");
@@ -122,13 +119,10 @@ export function CommandPalette({
     }
   }, [open]);
 
-  // Build the full command list. This is memoised per render but the inputs are
-  // small so it's cheap.
   const allItems = useMemo<CommandItem[]>(() => {
     const items: CommandItem[] = [];
     const close = () => onOpenChange(false);
 
-    // Navigation actions
     items.push({
       id: "nav-home",
       label: "Go to home page",
@@ -141,7 +135,6 @@ export function CommandPalette({
       },
     });
 
-    // Settings tabs
     const settingsTabs = [
       { id: "appearance", label: "Appearance", icon: Palette },
       { id: "cloak", label: "Tab Cloaking", icon: EyeOff },
@@ -172,7 +165,6 @@ export function CommandPalette({
       },
     });
 
-    // Search engine switcher
     for (const e of SEARCH_ENGINES) {
       items.push({
         id: `engine-${e.id}`,
@@ -188,7 +180,6 @@ export function CommandPalette({
       });
     }
 
-    // Bookmarks
     for (const b of bookmarks) {
       items.push({
         id: `bookmark-${b.url}`,
@@ -205,7 +196,6 @@ export function CommandPalette({
       });
     }
 
-    // History entries (most recent first)
     for (const h of history.slice(0, 10)) {
       items.push({
         id: `history-${h.url}-${h.visitedAt}`,
@@ -221,7 +211,6 @@ export function CommandPalette({
       });
     }
 
-    // Shortcuts
     const shortcuts = [
       { name: "Wikipedia", url: "https://wikipedia.org" },
       { name: "YouTube", url: "https://youtube.com" },
@@ -246,7 +235,6 @@ export function CommandPalette({
     return items;
   }, [history, bookmarks, settings.searchEngine, navigate, onOpenChange, onOpenSettings, onOpenHistory, setSearchEngine]);
 
-  // Filter + sort by fuzzy score
   const filtered = useMemo(() => {
     if (!query.trim()) return allItems;
     const scored = allItems
@@ -263,7 +251,6 @@ export function CommandPalette({
     return scored.map((s) => s.item);
   }, [query, allItems]);
 
-  // If the query looks like a URL or search, add a "navigate to" option at top
   const navigateOption = useMemo<CommandItem | null>(() => {
     const trimmed = query.trim();
     if (!trimmed) return null;
@@ -284,7 +271,6 @@ export function CommandPalette({
 
   const displayItems = navigateOption ? [navigateOption, ...filtered] : filtered;
 
-  // Clamp active index
   useEffect(() => {
     setActiveIndex((i) => Math.min(i, displayItems.length - 1));
   }, [displayItems.length]);
@@ -302,7 +288,6 @@ export function CommandPalette({
     }
   };
 
-  // Group items by category for display
   const grouped = useMemo(() => {
     const groups: { category: string; items: CommandItem[] }[] = [];
     let lastCat = "";
@@ -322,7 +307,6 @@ export function CommandPalette({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="top-[15vh] gap-0 overflow-hidden p-0 sm:max-w-xl" onKeyDown={onKeyDown}>
         <DialogTitle className="sr-only">Command palette</DialogTitle>
-        {/* Search input */}
         <div className="flex items-center gap-3 border-b border-border/40 px-4 py-3">
           <Search className="size-4 shrink-0 text-muted-foreground" />
           <Input
@@ -342,7 +326,6 @@ export function CommandPalette({
           </kbd>
         </div>
 
-        {/* Results */}
         <div className="max-h-[50vh] overflow-y-auto p-2">
           {displayItems.length === 0 ? (
             <div className="flex flex-col items-center gap-2 py-10 text-center">
@@ -403,7 +386,6 @@ export function CommandPalette({
           )}
         </div>
 
-        {/* Footer hint */}
         <div className="flex items-center justify-between border-t border-border/40 px-4 py-2 text-[11px] text-muted-foreground">
           <div className="flex items-center gap-3">
             <span className="flex items-center gap-1">

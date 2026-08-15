@@ -6,22 +6,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 
-/**
- * QR code generator.
- *
- * Uses the free api.qrserver.com endpoint (no API key required) to render a QR
- * image from arbitrary text or a URL. The generated image can be downloaded as
- * PNG. Entirely client-side beyond the image fetch.
- */
 export function QrGenerator({ onClose }: { onClose?: () => void }) {
   const [text, setText] = useState("https://");
   const [size, setSize] = useState(256);
   const [imgError, setImgError] = useState(false);
   const imgRef = useRef<HTMLImageElement>(null);
 
-  // Clear the error flag whenever the input or size changes. Using an onChange
-  // handler (not an effect) keeps the setState out of the effect body, which
-  // satisfies React 19's set-state-in-effect lint rule.
   const handleTextChange = (value: string) => {
     setText(value);
     setImgError(false);
@@ -41,7 +31,7 @@ export function QrGenerator({ onClose }: { onClose?: () => void }) {
 
   const download = () => {
     if (!hasContent || !imgRef.current) return;
-    // Fetch the image as a blob and trigger a download.
+
     fetch(src)
       .then((res) => res.blob())
       .then((blob) => {
@@ -55,7 +45,7 @@ export function QrGenerator({ onClose }: { onClose?: () => void }) {
         URL.revokeObjectURL(url);
       })
       .catch(() => {
-        /* ignore download errors */
+
       });
   };
 
@@ -88,7 +78,6 @@ export function QrGenerator({ onClose }: { onClose?: () => void }) {
         />
       </div>
 
-      {/* QR preview */}
       <div className="flex flex-col items-center gap-3 rounded-xl border border-border/40 bg-card/30 p-4">
         {hasContent && !imgError ? (
           <>
@@ -126,7 +115,6 @@ export function QrGenerator({ onClose }: { onClose?: () => void }) {
         )}
       </div>
 
-      {/* Size selector */}
       <div className="flex items-center gap-2">
         <span className="text-xs text-muted-foreground">Size:</span>
         {[128, 256, 384].map((s) => (

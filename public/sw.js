@@ -1,37 +1,26 @@
-/*
- * Hypers0nic service worker.
- *
- * Uses Scramjet v1 exclusively in the SW (v2 alpha crashes in SW context
- * due to missing browser API bindings). V2 is only used client-side.
- *
- * Includes ad/tracker blocking, search result link rewriting, and robust
- * retry logic with IDB self-healing.
- *
- * Tricky-site (YouTube/Twitch) hardening:
- *   - Mid-stream retry: non-HTML fetches that fail transiently are retried
- *     transparently up to 2 times (video chunks, API calls).
- *   - 5xx auto-retry: 502/503/504 responses from the target are retried once
- *     after a short delay — handles transient relay hiccups.
- *   - Response header preservation: all headers (including CSP, CORS,
- *     Set-Cookie) are passed through so SPAs with strict CSPs keep working.
- *   - Runtime precache: the Scramjet JS bundle and WASM are cached on first
- *     fetch so subsequent navigations don't re-download them.
- */
 importScripts("/scramjet/scramjet.all.js");
 
 var PROXY_PREFIX = "/service/";
 var configLoaded = false;
-// Deferred — the ScramjetServiceWorker is not created until the main thread
-// signals "controllerReady". This prevents the SW's constructor (which may
-// call loadConfig and open the $scramjet IDB) from blocking the controller's
-// init() write — a deadlock that hangs controller.init() forever.
+
 var scramjet = null;
 var { ScramjetServiceWorker } = self.$scramjetLoadWorker();
 
-// --- Runtime precache ---
-// Cache the Scramjet bundle + WASM so they load instantly on every navigation.
-// Without this, each new /service/* page triggers a fresh fetch of the ~500KB
-// JS bundle and ~500KB WASM from disk — a noticeable delay on slow connections.
+function setProxyPrefix(newPrefix) {
+  if (typeof newPrefix !== "string") return;
+
+  if (!/^\/[a-z0-9\-]+\/$/i.test(newPrefix)) return;
+  if (newPrefix === PROXY_PREFIX) return;
+  console.log("[hypers0nic/sw] proxy prefix changed:", PROXY_PREFIX, "->", newPrefix);
+  PROXY_PREFIX = newPrefix;
+
+  configLoaded = false;
+
+  if (scramjet && scramjet.config) {
+    scramjet.config.prefix = PROXY_PREFIX;
+  }
+}
+
 var RUNTIME_CACHE = "hypers0nic-runtime-v1";
 var PRECACHE_URLS = [
   "/scramjet/scramjet.all.js",
@@ -42,12 +31,11 @@ var PRECACHE_URLS = [
 
 self.addEventListener("install", function(event) {
   self.skipWaiting();
-  // Precache the Scramjet runtime in the background. This won't block
-  // installation — if it fails, the assets will be fetched on-demand.
+
   event.waitUntil(
     caches.open(RUNTIME_CACHE).then(function(cache) {
       return cache.addAll(PRECACHE_URLS).catch(function() {
-        // Individual asset failures are OK — they'll be cached on first fetch.
+
       });
     })
   );
@@ -55,7 +43,7 @@ self.addEventListener("install", function(event) {
 self.addEventListener("activate", function(event) {
   event.waitUntil(
     self.clients.claim().then(function() {
-      // Clean up old cache versions if present.
+
       return caches.keys().then(function(keys) {
         return Promise.all(
           keys.filter(function(k) { return k !== RUNTIME_CACHE; })
@@ -66,16 +54,6 @@ self.addEventListener("activate", function(event) {
   );
 });
 
-// --- Controller-ready handshake ---
-// The main thread's ScramjetController.init() writes the config to the
-// $scramjet IndexedDB. If the SW opens the same DB (via loadConfig) before
-// the controller has finished writing, the SW's connection blocks the
-// controller's write — causing controller.init() to hang forever.
-//
-// To prevent this deadlock, the SW does NOT create its ScramjetServiceWorker
-// or call loadConfig() until the main thread signals "controllerReady".
-// If a /service/ request arrives before the controller is ready, the SW
-// waits (up to 15s) for the signal.
 var controllerReady = false;
 var controllerReadyWaiters = [];
 function notifyControllerReady() {
@@ -99,18 +77,18 @@ self.addEventListener("message", function(event) {
   if (event.data === "skipWaiting") self.skipWaiting();
   else if (event.data === "controllerReady") notifyControllerReady();
   else if (event.data === "releaseDB") {
-    // DON'T null scramjet or reset controllerReady here. The old code reset
-    // controllerReady=false which caused the fetch handler to wait again,
-    // and if controllerReady message was lost, scramjet would be null.
-    // Instead, just reset configLoaded so the config is reloaded on next fetch.
+
     configLoaded = false;
   }
+  else if (typeof event.data === "object" && event.data && event.data.type === "setPrefix") {
+
+    setProxyPrefix(event.data.prefix);
+  }
   else if (event.data === "ping") {
-    event.source && event.source.postMessage({ type: "pong", configLoaded: configLoaded, controllerReady: controllerReady });
+    event.source && event.source.postMessage({ type: "pong", configLoaded: configLoaded, controllerReady: controllerReady, proxyPrefix: PROXY_PREFIX });
   }
 });
 
-// --- Ad/tracker blocker ---
 var AD_BLOCK_DOMAINS = [
   "doubleclick.net","googlesyndication.com","googleadservices.com",
   "google-analytics.com","googletagmanager.com","googletagservices.com",
@@ -227,7 +205,7 @@ function isHtmlResponse(response) {
 
 function injectIntoHtml(response) {
   var contentLength = parseInt(response.headers.get("content-length") || "0", 10);
-  // Cap body read at 5MB to avoid blocking the SW on huge pages.
+
   if (contentLength > 5 * 1024 * 1024) return Promise.resolve(stripFrameHeaders(response));
   return response.text().then(function(html) {
     if (!html || html.length < 50) return response;
@@ -239,14 +217,7 @@ function injectIntoHtml(response) {
     var newHeaders = new Headers();
     response.headers.forEach(function(value, key) {
       var lower = key.toLowerCase();
-      // Drop headers that would break the proxy iframe:
-      // - content-length: body changed by injection
-      // - content-security-policy / report-only: would block injected scripts
-      // - x-frame-options: would prevent the page from loading in an iframe
-      //   (critical for the about:blank popup feature, which loads proxied
-      //   content inside an iframe)
-      // - cross-origin-opener-policy / cross-origin-embedder-policy: can
-      //   isolate the iframe and break proxy communication
+
       if (lower === "content-length") return;
       if (lower === "content-security-policy") return;
       if (lower === "content-security-policy-report-only") return;
@@ -260,10 +231,6 @@ function injectIntoHtml(response) {
   }).catch(function() { return response; });
 }
 
-// Strip frame-blocking and isolation headers from ANY response (HTML or
-// non-HTML). This ensures proxied content can always be displayed inside
-// the proxy iframe, even if the target site sets X-Frame-Options or COOP/COEP.
-// We create a new Response with the same body but cleaned headers.
 function stripFrameHeaders(response) {
   if (!response) return response;
   var modified = false;
@@ -279,7 +246,7 @@ function stripFrameHeaders(response) {
     }
     newHeaders.set(key, value);
   });
-  if (!modified) return response; // No changes needed — return original.
+  if (!modified) return response;
   try {
     return new Response(response.body, {
       status: response.status,
@@ -287,15 +254,10 @@ function stripFrameHeaders(response) {
       headers: newHeaders,
     });
   } catch (e) {
-    return response; // If we can't clone (streaming), return original.
+    return response;
   }
 }
 
-// --- IDB self-healing ---
-// If the $scramjet DB exists but is missing object stores (the race condition
-// where the SW's loadConfig opened the DB before the controller created the
-// schema), delete it so the controller can recreate it cleanly.
-// All IDB operations are raced against a 5-second timeout to prevent hangs.
 function healScramjetDB() {
   return new Promise(function(resolve) {
     var DB_NAME = "$scramjet";
@@ -337,13 +299,8 @@ function healScramjetDB() {
   });
 }
 
-// Safe loadConfig wrapper — heals the DB if the transaction fails.
-// Races loadConfig() against a 5-second timeout to prevent hangs.
-// CRITICAL: If scramjet is null, we create it first. This prevents the
-// "Cannot read properties of null (reading 'loadConfig')" error that occurs
-// when releaseDB resets controllerReady but controllerReady hasn't re-arrived.
 function safeLoadConfig() {
-  // Ensure scramjet exists before trying to call loadConfig
+
   if (!scramjet) {
     console.warn("[hypers0nic/sw] safeLoadConfig: scramjet is null, creating it");
     try {
@@ -360,7 +317,7 @@ function safeLoadConfig() {
     setTimeout(function() { reject(new Error("loadConfig timeout")); }, 5000);
   });
   return Promise.race([configPromise, timeoutPromise]).then(function() {
-    // Validate config has the expected prefix
+
     if (scramjet.config && scramjet.config.prefix === PROXY_PREFIX) {
       configLoaded = true;
     } else {
@@ -387,46 +344,35 @@ function safeLoadConfig() {
   });
 }
 
-// Check if a request is for a runtime asset (Scramjet bundle, WASM, etc).
-// These are cached via the Cache API for instant subsequent loads.
 function isRuntimeAsset(pathname) {
   return PRECACHE_URLS.indexOf(pathname) !== -1;
 }
 
-// Try the cache first for runtime assets. If not cached, fetch from network
-// and populate the cache for next time. Falls back to network on any error.
 function fetchRuntimeAsset(request) {
   return caches.open(RUNTIME_CACHE).then(function(cache) {
     return cache.match(request).then(function(cached) {
       if (cached) return cached;
       return fetch(request).then(function(response) {
-        // Only cache successful responses.
+
         if (response && response.ok) {
           cache.put(request, response.clone()).catch(function() {});
         }
         return response;
       }).catch(function() {
-        // Network failed — return cached version if any (even stale).
+
         return cache.match(request);
       });
     });
   });
 }
 
-// Fetch with transparent mid-stream retry for transient failures.
-// Non-HTML resources (video chunks, API calls, scripts) that fail with a
-// network error or 5xx are retried up to `maxRetries` times with an
-// exponential backoff (300ms, 600ms, 1200ms). This dramatically improves
-// reliability for streaming-heavy sites like YouTube and Twitch, where
-// individual chunk fetches can fail without breaking the overall playback.
 function fetchWithRetry(event, maxRetries = 3) {
-  // Exponential backoff: 300ms, 600ms, 1200ms, 2400ms, ...
+
   var BACKOFF_DELAYS = [300, 600, 1200, 2400, 4800];
   var attempt = 0;
   function tryFetch() {
     return scramjet.fetch(event).then(function(response) {
-      // 502/503/504 from the target — retry with exponential backoff.
-      // These often indicate a transient relay hiccup that resolves itself.
+
       if (response && (response.status === 502 || response.status === 503 || response.status === 504) && attempt < maxRetries) {
         var delay = BACKOFF_DELAYS[attempt] || (BACKOFF_DELAYS[BACKOFF_DELAYS.length - 1] * 2);
         attempt++;
@@ -453,9 +399,6 @@ self.addEventListener("fetch", function(event) {
   var url = new URL(event.request.url);
   if (url.origin !== self.location.origin) return;
 
-  // Runtime assets (Scramjet bundle, WASM, BareMux worker, Epoxy transport)
-  // are served from the Cache API for instant loads. This is the SPEED fix:
-  // without it, every navigation re-downloads ~1MB of proxy runtime.
   if (isRuntimeAsset(url.pathname)) {
     event.respondWith(fetchRuntimeAsset(event.request));
     return;
@@ -466,27 +409,18 @@ self.addEventListener("fetch", function(event) {
   event.respondWith(
     (async function() {
       var maxAttempts = 7;
-      var delays = [200, 400, 600, 800, 1000, 1500, 2000];
 
-      // Wait for the main thread's controller to finish init before touching
-      // the $scramjet IDB. This prevents the deadlock where the SW's DB
-      // connection blocks the controller's config write.
+      var delays = [100, 300, 700, 1500, 3000, 5000, 8000];
+
       await waitForControllerReady(15000);
 
       for (var i = 0; i < maxAttempts; i++) {
         try {
-          // Heal DB on first attempt if needed
+
           if (i === 0 && !configLoaded) {
             await healScramjetDB();
           }
 
-          // Config persistence — once we've successfully loaded the config
-          // (configLoaded === true) AND scramjet.config still has the correct
-          // prefix, SKIP the safeLoadConfig() IDB read on subsequent fetches.
-          // This saves ~50ms per fetch (no IDB round-trip) and prevents race
-          // conditions where multiple concurrent fetches all try to read the
-          // config simultaneously. Only re-read if configLoaded is false OR
-          // the config object is missing or has the wrong prefix.
           if (!configLoaded || !scramjet || !scramjet.config || scramjet.config.prefix !== PROXY_PREFIX) {
             await safeLoadConfig();
           }
@@ -496,19 +430,13 @@ self.addEventListener("fetch", function(event) {
               await new Promise(function(r) { setTimeout(r, delays[i] || 2000); });
               continue;
             }
-            // All retries exhausted and config still not loaded — return
-            // an error instead of falling through to scramjet.route() which
-            // would fail and cause a confusing 404 from the Next.js server.
+
             return new Response(
               "Proxy not ready: config not loaded after " + maxAttempts + " retries.",
               { status: 502, headers: { "Content-Type": "text/plain" } }
             );
           }
 
-          // Null check: if scramjet is null, create it. This happens when
-          // releaseDB was received (resets controllerReady) but controllerReady
-          // hasn't re-arrived yet. Instead of failing, we create the SW and
-          // load the config ourselves.
           if (!scramjet) {
             console.warn("[hypers0nic/sw] scramjet is null in fetch handler, creating it");
             try {
@@ -521,9 +449,6 @@ self.addEventListener("fetch", function(event) {
             }
           }
 
-          // CRITICAL: Ensure config is loaded before routing. The "Cannot read
-          // properties of undefined (reading 'prefix')" error occurs when
-          // scramjet.config is undefined.
           if (!scramjet.config || !scramjet.config.prefix) {
             console.log("[hypers0nic/sw] config missing, calling loadConfig()...");
             try {
@@ -536,7 +461,6 @@ self.addEventListener("fetch", function(event) {
             }
           }
 
-          // Final check — if config is STILL missing, retry
           if (!scramjet.config || !scramjet.config.prefix) {
             if (i < maxAttempts - 1) {
               console.warn("[hypers0nic/sw] config still not loaded, retrying...");
@@ -552,12 +476,9 @@ self.addEventListener("fetch", function(event) {
           configLoaded = true;
 
           if (scramjet.route(event)) {
-            // Use fetchWithRetry for transparent mid-stream retry on
-            // transient failures (video chunks, API calls, 5xx responses).
-            // Max 3 retries with exponential backoff (300ms, 600ms, 1200ms).
+
             var response = await fetchWithRetry(event, 3);
 
-            // Block ad/tracker requests at network level
             var encodedUrl = url.pathname.substring(PROXY_PREFIX.length);
             var decodedUrl;
             try { decodedUrl = decodeURIComponent(encodedUrl); } catch(e) { decodedUrl = encodedUrl; }
@@ -565,19 +486,16 @@ self.addEventListener("fetch", function(event) {
               return new Response("", { status: 204, headers: { "Content-Type": "text/plain" } });
             }
 
-            // Inject ad blocker + link rewriter into HTML responses.
             if (response && response.ok && isHtmlResponse(response)) {
               try { return await injectIntoHtml(response); } catch(e) { return stripFrameHeaders(response); }
             }
             return stripFrameHeaders(response);
           }
-          // Not a scramjet route — return 404 directly instead of calling
-          // fetch(event.request) which goes to the network and produces a
-          // confusing 404 from the Next.js dev server.
+
           return new Response("Not found.", { status: 404, headers: { "Content-Type": "text/plain" } });
         } catch (err) {
           if (i < maxAttempts - 1) {
-            // If it's the IDB error, heal and retry
+
             if (err && (err.name === "NotFoundError" || (err.message && err.message.indexOf("object store") !== -1))) {
               await healScramjetDB();
             }
@@ -585,8 +503,7 @@ self.addEventListener("fetch", function(event) {
             continue;
           }
           console.error("[hypers0nic/sw] scramjet error after " + maxAttempts + " retries:", err);
-          // Return a clear error response instead of trying fetch(event.request)
-          // which goes to the network and produces a confusing 404.
+
           return new Response(
             "Scramjet proxy error: " + (err && err.message || err),
             { status: 502, headers: { "Content-Type": "text/plain" } }

@@ -49,7 +49,7 @@ export function AppsPanel({
         <DialogTitle className="sr-only">Apps</DialogTitle>
 
         {activeApp === null ? (
-          /* App launcher grid */
+
           <div className="p-5">
             <h2 className="mb-3 text-sm font-semibold text-foreground">Quick apps</h2>
             <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
@@ -69,9 +69,8 @@ export function AppsPanel({
             </div>
           </div>
         ) : (
-          /* Active app view */
+
           <div className="p-4">
-            {/* App switcher bar */}
             <div className="mb-3 flex items-center gap-1 border-b border-border/20 pb-2">
               <button
                 onClick={() => setActiveApp(null)}

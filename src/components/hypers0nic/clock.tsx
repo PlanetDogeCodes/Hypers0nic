@@ -17,11 +17,8 @@ function format(date: Date): ClockState {
   return { time, ampm };
 }
 
-/** Compact clock for the top bar — 12-hour format with AM/PM. */
 export function Clock({ className }: { className?: string }) {
-  // Initialize with a static placeholder to prevent hydration mismatch.
-  // The server renders "--:--" and the client also renders "--:--" on the
-  // first pass, then the real time is set in useEffect after hydration.
+
   const [state, setState] = useState<ClockState>({ time: "--:--", ampm: "" });
 
   useEffect(() => {

@@ -8,6 +8,22 @@ import { useEffect, useRef, useState } from "react";
 export function ProxyHUD() {
   const scramjet = useHypers0nic((s) => s.scramjet);
 
+  const latency = scramjet.latency;
+  let qualityColor = "text-muted-foreground";
+  let qualityLabel = "";
+  if (latency !== undefined && scramjet.status === "ready") {
+    if (latency < 300) {
+      qualityColor = "text-emerald-500";
+      qualityLabel = `${latency}ms`;
+    } else if (latency < 800) {
+      qualityColor = "text-amber-500";
+      qualityLabel = `${latency}ms`;
+    } else {
+      qualityColor = "text-destructive";
+      qualityLabel = `${latency}ms`;
+    }
+  }
+
   const config = {
     idle: {
       label: "Standing by",
@@ -66,6 +82,12 @@ export function ProxyHUD() {
           {scramjet.version && scramjet.status === "ready" && (
             <span className="rounded border border-primary/30 px-1 py-0.5 text-[9px] font-medium text-primary">
               v{scramjet.version}
+            </span>
+          )}
+          {qualityLabel && (
+            <span className={cn("flex items-center gap-1 font-mono text-[9px] font-medium", qualityColor)}>
+              <span className={cn("inline-block size-1.5 rounded-full", qualityColor.replace("text-", "bg-"))} />
+              {qualityLabel}
             </span>
           )}
         </div>

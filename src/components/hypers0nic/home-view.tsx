@@ -62,7 +62,6 @@ export function HomeView({ onOpenHistory }: { onOpenHistory?: () => void }) {
   return (
     <div className="flex min-h-[calc(100vh-3rem)] flex-col items-center justify-center px-4 py-8">
       <div className="flex w-full max-w-xl flex-col items-center">
-        {/* Logo + search (centered hero) */}
         <motion.div
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
@@ -83,7 +82,6 @@ export function HomeView({ onOpenHistory }: { onOpenHistory?: () => void }) {
 
           <ProxyHUD />
 
-          {/* Search engine selector */}
           <div className="mt-4 flex flex-wrap items-center justify-center gap-1">
             {SEARCH_ENGINES.map((e) => (
               <button
@@ -103,7 +101,6 @@ export function HomeView({ onOpenHistory }: { onOpenHistory?: () => void }) {
           </div>
         </motion.div>
 
-        {/* Shortcuts + bookmarks + recent history */}
         <motion.div
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
@@ -172,7 +169,6 @@ export function HomeView({ onOpenHistory }: { onOpenHistory?: () => void }) {
             </div>
           )}
 
-          {/* Bookmarks strip */}
           {bookmarks.length > 0 && (
             <div>
               <div className="mb-2 flex items-center gap-2">
@@ -222,7 +218,6 @@ export function HomeView({ onOpenHistory }: { onOpenHistory?: () => void }) {
             </div>
           )}
 
-          {/* Recent history strip */}
           {recentHistory.length > 0 && (
             <div>
               <div className="mb-2 flex items-center gap-2">
@@ -270,7 +265,6 @@ export function HomeView({ onOpenHistory }: { onOpenHistory?: () => void }) {
         </motion.div>
       </div>
 
-      {/* Add custom shortcut dialog */}
       <AddShortcutDialog
         open={showAddShortcut}
         onOpenChange={setShowAddShortcut}

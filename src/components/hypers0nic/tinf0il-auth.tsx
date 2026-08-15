@@ -49,9 +49,7 @@ export function Tinf0ilAuth({
 
     setBusy(true);
     try {
-      // Authenticate against the Tinf0il auth API. The endpoint is built-in —
-      // no custom endpoint needed. The API handles both login and signup
-      // based on the mode.
+
       const res = await fetch("/api/tinfoil/auth", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -69,17 +67,15 @@ export function Tinf0ilAuth({
 
       const data = await res.json();
 
-      // Apply the imported settings.
       if (data.profile?.payload) {
         const newSettings = applyTinfoilPayload(
           useHypers0nic.getState().settings,
           data.profile.payload,
           data.profile.username
         );
-        // Update the store with the new settings.
+
         useHypers0nic.setState({ settings: newSettings });
 
-        // Apply theme and tab cloak.
         if (data.profile.payload.theme) {
           setTheme(data.profile.payload.theme);
         }
@@ -99,9 +95,7 @@ export function Tinf0ilAuth({
           ? `Welcome back, ${data.profile.username}!`
           : `Account created. Welcome, ${data.profile.username}!`
       );
-      // Store the password as a sync token in sessionStorage so the auto-sync
-      // hook can push settings changes to the Tinf0il account. sessionStorage
-      // is cleared when the tab closes, so the token doesn't persist.
+
       sessionStorage.setItem("hypers0nic:tinfoil-token", password);
       onOpenChange(false);
       setUsername("");
@@ -120,7 +114,6 @@ export function Tinf0ilAuth({
     toast.success("Disconnected from Tinf0il.");
   };
 
-  // If already connected, show the profile view.
   if (tinfoil.connected) {
     return (
       <Dialog open={open} onOpenChange={onOpenChange}>

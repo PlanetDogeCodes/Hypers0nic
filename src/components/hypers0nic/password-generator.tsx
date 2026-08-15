@@ -40,13 +40,13 @@ export function PasswordGenerator({ onClose }: { onClose?: () => void }) {
     }
 
     const allChars = pools.join("");
-    // Guarantee at least one char from each selected pool.
+
     const guaranteed = pools.map((pool) => pool[Math.floor(Math.random() * pool.length)]);
     const remaining: string[] = [];
     for (let i = 0; i < length - guaranteed.length; i++) {
       remaining.push(allChars[Math.floor(Math.random() * allChars.length)]);
     }
-    // Fisher-Yates shuffle so the guaranteed chars aren't always at the start.
+
     const result = [...guaranteed, ...remaining];
     for (let i = result.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
@@ -55,7 +55,6 @@ export function PasswordGenerator({ onClose }: { onClose?: () => void }) {
     setPassword(result.join(""));
   }, [length, useLower, useUpper, useNumbers, useSymbols]);
 
-  // Generate on first mount.
   useMemo(() => {
     if (!password) generate();
   }, []);
@@ -68,7 +67,6 @@ export function PasswordGenerator({ onClose }: { onClose?: () => void }) {
     setTimeout(() => setCopied(false), 1500);
   };
 
-  // Strength estimation: based on entropy (pool size × length).
   const strength = useMemo(() => {
     if (!password) return { score: 0, label: "—", color: "text-muted-foreground" };
     const poolSize =
@@ -98,7 +96,6 @@ export function PasswordGenerator({ onClose }: { onClose?: () => void }) {
         )}
       </div>
 
-      {/* Password display */}
       <div className="flex items-center gap-2">
         <div className="flex-1 rounded-lg border border-border/40 bg-card/40 px-3 py-2.5">
           <div className="flex items-center justify-between">
@@ -124,7 +121,6 @@ export function PasswordGenerator({ onClose }: { onClose?: () => void }) {
         </button>
       </div>
 
-      {/* Strength meter */}
       <div className="flex items-center gap-2">
         {strength.score >= 3 ? (
           <ShieldCheck className={cn("size-4", strength.color)} />
@@ -151,7 +147,6 @@ export function PasswordGenerator({ onClose }: { onClose?: () => void }) {
         <span className={cn("text-xs font-medium", strength.color)}>{strength.label}</span>
       </div>
 
-      {/* Length slider */}
       <div className="space-y-2">
         <div className="flex items-center justify-between">
           <Label className="text-xs text-muted-foreground">Length</Label>
@@ -167,7 +162,6 @@ export function PasswordGenerator({ onClose }: { onClose?: () => void }) {
         />
       </div>
 
-      {/* Character set toggles */}
       <div className="grid grid-cols-2 gap-2">
         <ToggleRow label="Lowercase (a-z)" checked={useLower} onChange={setUseLower} />
         <ToggleRow label="Uppercase (A-Z)" checked={useUpper} onChange={setUseUpper} />
