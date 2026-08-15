@@ -194,7 +194,7 @@ export function AdvancedPanel() {
           <Button onClick={handleSave}>Save</Button>
         </div>
         <p className="text-[11px] text-muted-foreground">
-          Default: <code className="rounded bg-muted/60 px-1 py-0.5">wss://anura.pro</code> (public relay)
+          Default: <code className="rounded bg-muted/60 px-1 py-0.5">wss://anura.pro/</code> (public relay)
         </p>
         <Button variant="ghost" size="sm" onClick={handleReset} className="mt-1 h-7 text-xs">
           Reset to default relay

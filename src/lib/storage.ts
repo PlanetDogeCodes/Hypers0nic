@@ -36,7 +36,7 @@ export const DEFAULT_SETTINGS: Hypers0nicSettings = {
     useLibcurlTransport: false,
   },
 
-  wispUrl: "wss://anura.pro",
+  wispUrl: "wss://anura.pro/",
 
   wispUrlPath: "",
 

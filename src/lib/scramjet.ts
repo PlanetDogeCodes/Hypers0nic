@@ -38,7 +38,7 @@ const FALLBACK_WISP_SERVERS = [
   "wss://wisp.mint.lavenderburrito.com/",
 ];
 
-const DEFAULT_WISP_URL = "wss://anura.pro";
+const DEFAULT_WISP_URL = "wss://anura.pro/";
 
 export type ScramjetStatus = "idle" | "loading" | "ready" | "error";
 
@@ -81,7 +81,11 @@ class ScramjetManager {
   }
 
   resolveWispUrl(custom?: string): string {
-    if (custom && custom.trim()) return custom.trim();
+    if (custom && custom.trim()) {
+      var url = custom.trim();
+      if (!url.endsWith("/")) url += "/";
+      return url;
+    }
     return DEFAULT_WISP_URL;
   }
 
@@ -128,8 +132,8 @@ class ScramjetManager {
     this.setState({ status: "loading", error: undefined });
     try {
       let wispUrl = this.resolveWispUrl(customWisp);
-
       wispUrl = this.applyWispPathDisguise(wispUrl);
+      if (!wispUrl.endsWith("/")) wispUrl += "/";
 
       await this.loadBundle();
       await this.setupTransport(wispUrl);
@@ -150,7 +154,7 @@ class ScramjetManager {
       });
 
       try {
-        navigator.serviceWorker.controller?.postMessage("releaseDB");
+        navigator.serviceWorker.controller?.postMessage({ type: "hypers0nic:releaseDB" });
       } catch {}
       await new Promise((r) => setTimeout(r, 200));
 
@@ -162,7 +166,7 @@ class ScramjetManager {
       ]);
 
       try {
-        navigator.serviceWorker.controller?.postMessage("controllerReady");
+        navigator.serviceWorker.controller?.postMessage({ type: "hypers0nic:controllerReady" });
       } catch {}
 
       this.setState({
@@ -228,13 +232,15 @@ class ScramjetManager {
       (v, i, a) => v && a.indexOf(v) === i
     );
 
-    const candidates: string[] = [];
+    var candidates: string[] = [];
     for (const c of rawCandidates) {
+      var normalized = c;
+      if (!normalized.endsWith("/")) normalized += "/";
       if (c.startsWith("wss://")) {
-        const wsVariant = "ws://" + c.slice("wss://".length);
+        const wsVariant = "ws://" + normalized.slice("wss://".length);
         if (!candidates.includes(wsVariant)) candidates.push(wsVariant);
       }
-      if (!candidates.includes(c)) candidates.push(c);
+      if (!candidates.includes(normalized)) candidates.push(normalized);
     }
 
     const settingsRaw =
@@ -561,7 +567,7 @@ export async function registerServiceWorker(): Promise<boolean> {
       try {
         const prefix = getProxyPrefix();
         navigator.serviceWorker.controller.postMessage({
-          type: "setPrefix",
+          type: "hypers0nic:setPrefix",
           prefix: prefix,
         });
       } catch {}
@@ -581,7 +587,7 @@ async function waitForController(
   if (navigator.serviceWorker.controller) return;
   const sw = reg.active || reg.installing || reg.waiting;
   if (sw) {
-    if (reg.waiting) reg.waiting.postMessage("skipWaiting");
+    if (reg.waiting) reg.waiting.postMessage({ type: "hypers0nic:skipWaiting" });
   }
   await new Promise<void>((resolve) => {
     const onChange = () => {

@@ -74,18 +74,20 @@ function waitForControllerReady(timeoutMs) {
 }
 
 self.addEventListener("message", function(event) {
-  if (event.data === "skipWaiting") self.skipWaiting();
-  else if (event.data === "controllerReady") notifyControllerReady();
-  else if (event.data === "releaseDB") {
-
-    configLoaded = false;
-  }
-  else if (typeof event.data === "object" && event.data && event.data.type === "setPrefix") {
-
-    setProxyPrefix(event.data.prefix);
-  }
-  else if (event.data === "ping") {
-    event.source && event.source.postMessage({ type: "pong", configLoaded: configLoaded, controllerReady: controllerReady, proxyPrefix: PROXY_PREFIX });
+  var data = event.data;
+  if (typeof data === "object" && data && data.type) {
+    var t = data.type;
+    if (t === "hypers0nic:skipWaiting") self.skipWaiting();
+    else if (t === "hypers0nic:controllerReady") notifyControllerReady();
+    else if (t === "hypers0nic:releaseDB") {
+      configLoaded = false;
+    }
+    else if (t === "hypers0nic:setPrefix") {
+      setProxyPrefix(data.prefix);
+    }
+    else if (t === "hypers0nic:ping") {
+      event.source && event.source.postMessage({ type: "hypers0nic:pong", configLoaded: configLoaded, controllerReady: controllerReady, proxyPrefix: PROXY_PREFIX });
+    }
   }
 });
 
