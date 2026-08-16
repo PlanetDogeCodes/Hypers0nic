@@ -155,17 +155,13 @@ export function ProxyFrame() {
 
     let retried = false;
     const tryNavigate = async () => {
-
       const sj = getScramjet();
       try {
-        const healthy = await sj.quickHealthCheck();
-        if (!healthy) {
-          console.warn("[hypers0nic] transport health check failed, force-reconnecting");
-          sj.forceReconnect();
+        if (sj.getState().status !== "ready") {
           await sj.init(useHypers0nic.getState().settings.wispUrl);
         }
       } catch (e) {
-        console.warn("[hypers0nic] pre-nav health check error:", e);
+        console.warn("[hypers0nic] pre-nav init error:", e);
       }
       try {
         frameRef.current.go(url);
@@ -173,7 +169,6 @@ export function ProxyFrame() {
         if (!retried) {
           retried = true;
           sj.forceReconnect();
-
           sj.init(useHypers0nic.getState().settings.wispUrl)
             .then(() => {
               try {

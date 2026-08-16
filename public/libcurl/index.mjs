@@ -4447,7 +4447,7 @@ var libcurl = function() {
     }, "%S": function(date2) {
       return leadingNulls(date2.tm_sec, 2);
     }, "%t": function() {
-      return "	";
+      return "  ";
     }, "%u": function(date2) {
       return date2.tm_wday || 7;
     }, "%U": function(date2) {
@@ -6427,8 +6427,10 @@ var LibcurlClient = class {
   }
   async request(remote, method, body, headers, signal) {
     let headersObj = {};
-    for (let [key, value] of headers) {
-      headersObj[key] = value;
+    if (headers) {
+      for (let [key, value] of headers) {
+        headersObj[key] = value;
+      }
     }
     let payload = await this.session.fetch(remote.href, {
       method,
@@ -6446,8 +6448,10 @@ var LibcurlClient = class {
   }
   connect(url, protocols, requestHeaders, onopen, onmessage, onclose, onerror) {
     let headersObj = {};
-    for (let [key, value] of requestHeaders) {
-      headersObj[key] = value;
+    if (requestHeaders) {
+      for (let [key, value] of requestHeaders) {
+        headersObj[key] = value;
+      }
     }
     let socket = new libcurl.WebSocket(url.toString(), protocols, {
       headers: headersObj
