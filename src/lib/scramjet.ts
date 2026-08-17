@@ -484,12 +484,11 @@ class ScramjetManager {
 
           if (!this.isTransportAlive()) {
             console.warn("[hypers0nic] transport worker died while tab was hidden, reconnecting...");
-            this.forceReconnect();
             try {
               const settings = JSON.parse(
                 localStorage.getItem("hypers0nic:settings:v1") || "{}"
               );
-              await this.init(settings.wispUrl);
+              await this.forceReconnectAndWait(settings.wispUrl);
             } catch (e) {
               console.warn("[hypers0nic] visibility reconnect failed:", e);
             }

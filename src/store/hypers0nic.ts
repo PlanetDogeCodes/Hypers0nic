@@ -340,8 +340,7 @@ export const useHypers0nic = create<Hypers0nicStore>((set, get) => ({
         await sj.init(settings.wispUrl);
       } catch (err) {
         console.error("[hypers0nic] scramjet init failed, retrying:", err);
-        sj.forceReconnect();
-        await sj.init(settings.wispUrl);
+        await sj.forceReconnectAndWait(settings.wispUrl);
       }
     };
     try {

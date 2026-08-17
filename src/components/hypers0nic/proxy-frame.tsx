@@ -168,8 +168,7 @@ export function ProxyFrame() {
       } catch (err) {
         if (!retried) {
           retried = true;
-          sj.forceReconnect();
-          sj.init(useHypers0nic.getState().settings.wispUrl)
+          sj.forceReconnectAndWait(useHypers0nic.getState().settings.wispUrl)
             .then(() => {
               try {
                 frameRef.current?.go(url);
@@ -322,10 +321,9 @@ export function ProxyFrame() {
                   <button
                     onClick={() => {
                       const sj = getScramjet();
-                      sj.forceReconnect();
                       setStatus("loading");
                       setError(null);
-                      sj.init(useHypers0nic.getState().settings.wispUrl)
+                      sj.forceReconnectAndWait(useHypers0nic.getState().settings.wispUrl)
                         .then(() => {
                           if (frameRef.current && omniboxRef.current) {
                             settledRef.current = false;
@@ -352,12 +350,11 @@ export function ProxyFrame() {
                 <button
                   onClick={() => {
                     const sj = getScramjet();
-                    sj.forceReconnect();
                     setStatus("loading");
                     setError(null);
 
                     useHypers0nic.getState().setWispUrl("");
-                    sj.init("").then(() => {
+                    sj.forceReconnectAndWait("").then(() => {
                       if (frameRef.current && omniboxRef.current) {
                         settledRef.current = false;
                         recordedRef.current = false;

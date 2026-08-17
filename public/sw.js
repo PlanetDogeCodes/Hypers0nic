@@ -227,6 +227,9 @@ function injectIntoHtml(response) {
       if (lower === "cross-origin-opener-policy") return;
       if (lower === "cross-origin-embedder-policy") return;
       if (lower === "cross-origin-embedder-policy-report-only") return;
+      if (lower === "cross-origin-resource-policy") return;
+      if (lower === "cross-origin-resource-policy-report-only") return;
+      if (lower === "permissions-policy") return;
       newHeaders.set(key, value);
     });
     return new Response(html, { status: response.status, statusText: response.statusText, headers: newHeaders });
@@ -242,7 +245,10 @@ function stripFrameHeaders(response) {
     if (lower === "x-frame-options" ||
         lower === "cross-origin-opener-policy" ||
         lower === "cross-origin-embedder-policy" ||
-        lower === "cross-origin-embedder-policy-report-only") {
+        lower === "cross-origin-embedder-policy-report-only" ||
+        lower === "cross-origin-resource-policy" ||
+        lower === "cross-origin-resource-policy-report-only" ||
+        lower === "permissions-policy") {
       modified = true;
       return;
     }
