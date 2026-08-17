@@ -55,10 +55,6 @@ export default function RootLayout({
         <link rel="modulepreload" href="/baremux/worker.js" />
         <link rel="preconnect" href="https://anura.pro" />
         <link rel="preconnect" href="https://wisp.mercurywork.shop" />
-        <link rel="preconnect" href="https://wisp.seymour.dev" />
-        <link rel="preconnect" href="https://wispproxy.mcloud.work" />
-        <link rel="preconnect" href="https://wisp.aluwiwovb.be" />
-        <link rel="preconnect" href="https://wisp.mint.lavenderburrito.com" />
         <link rel="dns-prefetch" href="https://duckduckgo.com" />
         <link rel="dns-prefetch" href="https://google.com" />
         <link rel="dns-prefetch" href="https://suggestqueries.google.com" />

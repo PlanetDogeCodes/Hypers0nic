@@ -30,12 +30,8 @@ function getProxyPrefix(): string {
 }
 
 const FALLBACK_WISP_SERVERS = [
-  "wss://wisp.mercurywork.shop/",
-  "wss://wisp.seymour.dev/",
-  "wss://wispproxy.mcloud.work/",
   "wss://anura.pro/",
-  "wss://wisp.aluwiwovb.be/",
-  "wss://wisp.mint.lavenderburrito.com/",
+  "wss://wisp.mercurywork.shop/",
 ];
 
 const DEFAULT_WISP_URL = "wss://anura.pro/";
@@ -233,10 +229,11 @@ class ScramjetManager {
     );
 
     var candidates: string[] = [];
+    var isHttps = typeof window !== "undefined" && window.location.protocol === "https:";
     for (const c of rawCandidates) {
       var normalized = c;
       if (!normalized.endsWith("/")) normalized += "/";
-      if (c.startsWith("wss://")) {
+      if (c.startsWith("wss://") && !isHttps) {
         const wsVariant = "ws://" + normalized.slice("wss://".length);
         if (!candidates.includes(wsVariant)) candidates.push(wsVariant);
       }
@@ -262,16 +259,37 @@ class ScramjetManager {
         const transportPromise = conn.setTransport("/epoxy/index.mjs", [
           { wisp: candidate },
         ]);
-
         const timeoutPromise = new Promise<never>((_, reject) =>
           setTimeout(
             () => reject(new Error(`transport timeout for ${candidate}`)),
-            2500
+            5000
           )
         );
         await Promise.race([transportPromise, timeoutPromise]);
-        this.transportUrl = candidate;
-        return;
+
+        try {
+          const testClient = new (await import("@mercuryworkshop/bare-mux")).BareClient();
+          const testRes = await Promise.race([
+            testClient.fetch("https://www.google.com/generate_204", {
+              method: "GET",
+              credentials: "omit",
+              cache: "no-store",
+            }),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error("transport verification timeout")), 8000)
+            ),
+          ]);
+          if (testRes && testRes.status < 500) {
+            this.transportUrl = candidate;
+            console.log("[hypers0nic] epoxy transport verified via", candidate);
+            return;
+          } else {
+            throw new Error(`verification failed: status ${testRes?.status}`);
+          }
+        } catch (verifyErr) {
+          console.warn(`[hypers0nic] transport verification failed for ${candidate}:`, verifyErr);
+          throw verifyErr;
+        }
       } catch (err) {
         console.warn(`[hypers0nic] transport failed for ${candidate}:`, err);
         lastError = err;
@@ -306,9 +324,31 @@ class ScramjetManager {
           )
         );
         await Promise.race([transportPromise, timeoutPromise]);
-        this.transportUrl = candidate;
-        console.log("[hypers0nic] libcurl transport connected via", candidate);
-        return;
+
+        try {
+          const { BareClient } = await import("@mercuryworkshop/bare-mux");
+          const testClient = new BareClient();
+          const testRes = await Promise.race([
+            testClient.fetch("https://www.google.com/generate_204", {
+              method: "GET",
+              credentials: "omit",
+              cache: "no-store",
+            }),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error("libcurl verification timeout")), 8000)
+            ),
+          ]);
+          if (testRes && testRes.status < 500) {
+            this.transportUrl = candidate;
+            console.log("[hypers0nic] libcurl transport verified via", candidate);
+            return;
+          } else {
+            throw new Error(`verification failed: status ${testRes?.status}`);
+          }
+        } catch (verifyErr) {
+          console.warn(`[hypers0nic] libcurl verification failed for ${candidate}:`, verifyErr);
+          throw verifyErr;
+        }
       } catch (err) {
         console.warn(`[hypers0nic] libcurl transport failed for ${candidate}:`, err);
         lastError = err;
