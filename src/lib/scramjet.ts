@@ -625,6 +625,16 @@ export async function registerServiceWorker(): Promise<boolean> {
           prefix: prefix,
         });
       } catch {}
+
+      navigator.serviceWorker.addEventListener("message", (event) => {
+        if (event.data && event.data.type === "hypers0nic:wsFailed") {
+          console.warn("[hypers0nic] SW reported WebSocket failure, force-reconnecting transport");
+          const sj = getScramjet();
+          const settings = JSON.parse(localStorage.getItem("hypers0nic:settings:v1") || "{}");
+          sj.forceReconnectAndWait(settings.wispUrl).catch(() => {});
+        }
+      });
+
       return true;
     }
     return false;

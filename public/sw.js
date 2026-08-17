@@ -79,7 +79,7 @@ self.addEventListener("message", function(event) {
     var t = data.type;
     if (t === "hypers0nic:skipWaiting") self.skipWaiting();
     else if (t === "hypers0nic:controllerReady") notifyControllerReady();
-    else if (t === "hypers0nic:releaseDB") {
+    else if (t === "hypers0nic:releaseDB" || t === "hypers0nic:wsFailed") {
       configLoaded = false;
     }
     else if (t === "hypers0nic:setPrefix") {
@@ -133,37 +133,6 @@ var AD_BLOCK_CSS = '<style>' +
 
 var INJECT_SCRIPT = '<script>' +
   '(function(){' +
-  'var blockedDomains=' + JSON.stringify(AD_BLOCK_DOMAINS) + ';' +
-  'function isAdDomain(urlStr){' +
-    'try{var u=new URL(urlStr,location.href);var h=u.hostname;' +
-    'for(var i=0;i<blockedDomains.length;i++){' +
-      'if(h===blockedDomains[i]||h.endsWith("."+blockedDomains[i]))return true;' +
-    '}return false;}catch(e){return false;}' +
-  '}' +
-  'var origFetch=window.fetch;' +
-  'window.fetch=function(input,init){' +
-    'var url=typeof input==="string"?input:(input&&input.url)||"";' +
-    'if(isAdDomain(url))return Promise.resolve(new Response("",{status:204}));' +
-    'return origFetch.apply(this,arguments);' +
-  '};' +
-  'var origOpen=XMLHttpRequest.prototype.open;' +
-  'XMLHttpRequest.prototype.open=function(method,url){' +
-    'if(isAdDomain(url)){this._blocked=true;return;}' +
-    'return origOpen.apply(this,arguments);' +
-  '};' +
-  'var origSend=XMLHttpRequest.prototype.send;' +
-  'XMLHttpRequest.prototype.send=function(){' +
-    'if(this._blocked){' +
-      'Object.defineProperty(this,"readyState",{value:4});' +
-      'Object.defineProperty(this,"status",{value:204});' +
-      'Object.defineProperty(this,"responseText",{value:""});' +
-      'Object.defineProperty(this,"response",{value:""});' +
-      'this.dispatchEvent(new Event("load"));' +
-      'this.dispatchEvent(new Event("loadend"));' +
-      'return;' +
-    '}' +
-    'return origSend.apply(this,arguments);' +
-  '};' +
   'function rewriteUrl(url){' +
     'if(!url||url.startsWith("javascript:")||url.startsWith("mailto:")||' +
        'url.startsWith("tel:")||url.startsWith("#")||url.startsWith("data:")||' +
@@ -502,6 +471,11 @@ self.addEventListener("fetch", function(event) {
 
           return new Response("Not found.", { status: 404, headers: { "Content-Type": "text/plain" } });
         } catch (err) {
+          if (err && err.message && (err.message.indexOf("websocket did not open") !== -1 || err.message.indexOf("WebSocketConnectFailed") !== -1)) {
+            console.warn("[hypers0nic/sw] WebSocket connection failed, notifying main thread to reconnect");
+            var clients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+            clients.forEach(function(c) { c.postMessage({ type: "hypers0nic:wsFailed" }); });
+          }
           if (i < maxAttempts - 1) {
 
             if (err && (err.name === "NotFoundError" || (err.message && err.message.indexOf("object store") !== -1))) {
